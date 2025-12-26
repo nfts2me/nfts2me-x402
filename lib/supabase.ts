@@ -10,12 +10,12 @@ if (!supabaseUrl || !supabaseServiceKey) {
 
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-export const getMintingPageImage = unstable_cache(
+export const getMintingPageLogoAndName = unstable_cache(
     async (chainId: string, contractAddress: string) => {
         try {
             const { data, error } = await supabase
                 .from('MintingPages')
-                .select('ipfs_logo')
+                .select('ipfs_logo, name')
                 .eq('deployAddress', contractAddress)
                 // Ensure we match the network type stored in DB. If it's number vs string, this might matter.
                 // Assuming string based on usage.
@@ -27,7 +27,7 @@ export const getMintingPageImage = unstable_cache(
                 return null;
             }
 
-            return data?.ipfs_logo || null;
+            return data;
         } catch (e) {
             console.error('Unexpected error fetching minting page image:', e);
             return null;

@@ -1,15 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withX402 } from "@x402/next";
 // import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
-import { createWalletClient, createPublicClient, http, formatUnits } from "viem";
+import { createWalletClient, createPublicClient, http, formatUnits, Chain } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia } from "viem/chains";
-import { server, paywall, evmAddress } from "../../../../../../proxy";
-import { getMintingPageImage } from "../../../../../../lib/supabase";
+import { base, baseSepolia } from "viem/chains";
+import { server } from "../../../../../../proxy";
+import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
+import { createPaywall, evmPaywall } from "@x402/paywall";
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
-const USDC_ADDRESS = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+const USDC_ADDRESSES: Record<number, `0x${string}`> = {
+    8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Base
+    84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", // Base Sepolia
+};
+
 
 const ABI_CHECKS = [
     { inputs: [], name: "protocolFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
@@ -35,24 +40,30 @@ type SuccessResponse = {
     image?: string | null;
 };
 
-const handler = async (req: NextRequest) => {
+const handler = async (req: NextRequest, chain: Chain) => {
     try {
         const segments = req.url.split("/");
-        const chainId = segments.at(-3)!;
         const contractAddress = segments.at(-2)!;
         const amountStr = segments.at(-1)!;
         const amount = BigInt(amountStr || "1");
 
-        console.log("Minting to contract", contractAddress, "amount", amount);
-
         // We re-use validation or assume validation passed due to paywall check, 
         // but for safety in the mint action we should probably use the same params.
         const publicClient = createPublicClient({
-            chain: baseSepolia,
+            chain,
             transport: http()
         });
-        const erc20PaymentAddress = USDC_ADDRESS;
-        const [mintFee] = await Promise.all([
+        const [protocolFee, contractPaymentAddress, mintFee] = await Promise.all([
+            publicClient.readContract({
+                address: contractAddress as `0x${string}`,
+                abi: ABI_CHECKS,
+                functionName: "protocolFee"
+            }),
+            publicClient.readContract({
+                address: contractAddress as `0x${string}`,
+                abi: ABI_CHECKS,
+                functionName: "erc20PaymentAddress"
+            }),
             publicClient.readContract({
                 address: contractAddress as `0x${string}`,
                 abi: ABI_CHECKS,
@@ -61,10 +72,24 @@ const handler = async (req: NextRequest) => {
             })
         ]);
 
+        const USDC_ADDRESS = USDC_ADDRESSES[chain.id];
+        if (!USDC_ADDRESS) {
+            throw new Error(`USDC address not found for chain ${chain.id}`);
+        }
+
+        if (protocolFee !== 0n) {
+            throw new Error("Protocol fee is not zero");
+        }
+        if (contractPaymentAddress !== USDC_ADDRESS) {
+            throw new Error("ERC20 payment address is not USDC");
+        }
+
+        const erc20PaymentAddress = contractPaymentAddress;
+
         const account = privateKeyToAccount(PRIVATE_KEY);
         const client = createWalletClient({
             account,
-            chain: baseSepolia,
+            chain,
             transport: http(),
         });
 
@@ -89,7 +114,7 @@ const handler = async (req: NextRequest) => {
                 functionName: "approve",
                 args: [contractAddress as `0x${string}`, mintFee],
             });
-            await publicClient.waitForTransactionReceipt({ hash });
+            // await publicClient.waitForTransactionReceipt({ hash });
             console.log("Approved!");
         }
 
@@ -116,25 +141,18 @@ const handler = async (req: NextRequest) => {
     }
 };
 
-function getMintNftX402Config() {
+function getMintNftX402Config(chain: Chain, network: string, contractAddress: string, amount: string) {
     return {
         accepts: [
             {
                 scheme: "exact",
                 price: async (context: any) => {
-                    // console.log("DEBUG: Price function called", context);
-                    const segments = context.adapter.req.url.split("/");
-
-                    const chainId = segments.at(-3)!;
-                    const contractAddress = segments.at(-2)!;
-                    const amount = segments.at(-1)!;
-
                     const publicClient = createPublicClient({
-                        chain: baseSepolia,
+                        chain,
                         transport: http()
                     });
 
-                    const [protocolFee, erc20PaymentAddress, mintFee, name] = await Promise.all([
+                    const [protocolFee, erc20PaymentAddress, mintFee] = await Promise.all([
                         publicClient.readContract({
                             address: contractAddress as `0x${string}`,
                             abi: ABI_CHECKS,
@@ -150,47 +168,77 @@ function getMintNftX402Config() {
                             abi: ABI_CHECKS,
                             functionName: "mintFee",
                             args: [BigInt(amount)]
-                        }),
-                        publicClient.readContract({
-                            address: contractAddress as `0x${string}`,
-                            abi: ABI_CHECKS,
-                            functionName: "name"
                         })
                     ]);
-                    console.log("DEBUG: Contract data fetched:", { protocolFee, erc20PaymentAddress, mintFee, name });
+                    const USDC_ADDRESS = USDC_ADDRESSES[chain.id];
+                    if (!USDC_ADDRESS) {
+                        throw new Error(`USDC address not found for chain ${chain.id}`);
+                    }
+
+                    if (protocolFee !== 0n) {
+                        throw new Error("Protocol fee is not zero");
+                    }
+                    if (erc20PaymentAddress !== USDC_ADDRESS) {
+                        throw new Error("ERC20 payment address is not USDC");
+                    }
+                    console.log("DEBUG: Contract data fetched:", { protocolFee, erc20PaymentAddress, mintFee });
 
                     return formatUnits(mintFee, 6);
                 },
-                network: "eip155:84532",
+                network,
                 payTo: EVM_ADDRESS,
             },
         ],
         description: "Mint NFT",
         mimeType: "application/json",
-        /*extensions: {
-            ...declareDiscoveryExtension({
-                output: {
-                    example: {
-                        report: {
-                            success: true,
-                            message: "Minting successful!",
-                            txHash:
-                                "0x0d28bd6b9c2234f9a22767dd01e4c84250aa3c20ba44535616959d6d15505ee1",
-                        },
-                    },
-                },
-            }),
-        },*/
     };
 }
 
-/**
- * Protected weather API endpoint using withX402 wrapper
- */
-export const GET = withX402(
-    handler as any,
-    getMintNftX402Config() as any,
-    server,
-    undefined, // paywallConfig (using custom paywall from proxy.ts)
-    paywall,
-);
+const TESTNET_CHAIN_IDS = ["84532", "11155111", "80002"];
+
+function isTestnet(chainId: string | number): boolean {
+    return TESTNET_CHAIN_IDS.includes(String(chainId));
+}
+
+function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
+    if (!ipfsUrl) return undefined;
+    if (ipfsUrl.startsWith("ipfs://")) {
+        return ipfsUrl.replace("ipfs://", "https://ipfs.io/ipfs/");
+    }
+    return ipfsUrl;
+}
+
+export async function GET(req: NextRequest, props: { params: Promise<{ chainId: string, contractAddress: string, amount: string }> }) {
+    const params = await props.params;
+    const { chainId, contractAddress, amount } = params;
+
+    // Fetch branding from Supabase
+    const branding = await getMintingPageLogoAndName(chainId, contractAddress);
+
+    // Default to testnet=true if we can't determine, or follow user preference. 
+    // User asked "indicar si es testnet o no en funcion del chainid".
+    const testnet = isTestnet(chainId);
+
+    const appName = branding?.name || process.env.APP_NAME || "Next x402 Demo";
+    const appLogo = formatLogoUrl(branding?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
+
+    const dynamicPaywall = createPaywall()
+        .withNetwork(evmPaywall)
+        .withConfig({
+            appName,
+            appLogo,
+            testnet,
+        })
+        .build();
+
+    const chain = chainId === "84532" ? baseSepolia : base;
+    const protectedHandler = withX402(
+        ((req: NextRequest) => handler(req, chain)) as any,
+        getMintNftX402Config(chain, `eip155:${chainId}`, contractAddress, amount) as any,
+        server,
+        undefined,
+        dynamicPaywall
+    );
+
+    return protectedHandler(req);
+}

@@ -1,5 +1,5 @@
 import { paymentProxy } from "@x402/next";
-import { ExactEvmScheme } from "@x402/evm/exact/server";
+import { ExactEvmScheme, registerExactEvmScheme } from "@x402/evm/exact/server";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { createPaywall } from "@x402/paywall";
 import { evmPaywall } from "@x402/paywall/evm";
@@ -8,8 +8,11 @@ const facilitatorClient = new HTTPFacilitatorClient({
     url: "https://x402.org/facilitator"
 });
 
-export const server = new x402ResourceServer(facilitatorClient)
-    .register("eip155:84532", new ExactEvmScheme());
+// Create x402 resource server
+export const server = new x402ResourceServer(facilitatorClient);
+
+// Register schemes
+registerExactEvmScheme(server);
 
 export const evmAddress = process.env.WALLET_ADDRESS as `0x${string}`;
 // Build paywall
