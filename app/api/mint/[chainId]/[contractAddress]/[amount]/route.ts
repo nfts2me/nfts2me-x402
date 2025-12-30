@@ -141,7 +141,9 @@ const handler = async (req: NextRequest, chain: Chain) => {
     }
 };
 
-function getMintNftX402Config(chain: Chain, network: string, contractAddress: string, amount: string) {
+// La configuración de x402 para el pago.
+// Incluye el precio, la red, el contrato y la cantidad.
+function getMintNftX402Config(actionName: string, chain: Chain, network: string, contractAddress: string, amount: string) {
     return {
         accepts: [
             {
@@ -189,8 +191,15 @@ function getMintNftX402Config(chain: Chain, network: string, contractAddress: st
                 payTo: EVM_ADDRESS,
             },
         ],
-        description: "Mint NFT",
+        description: actionName,
         mimeType: "application/json",
+        extensions: {
+            bazaar: { // 666 nota alberto, revisar bazaar aquí https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer
+                discoverable: true,
+                category: "nfts",
+                tags: ["mint", "nft", "nfts", "erc721"],
+            },
+        },
     };
 }
 
@@ -209,18 +218,23 @@ function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
 }
 
 export async function GET(req: NextRequest, props: { params: Promise<{ chainId: string, contractAddress: string, amount: string }> }) {
+    // console.log("LOG MIO: GET /api/mint/[chainId]/[contractAddress]/[amount]");
     const params = await props.params;
     const { chainId, contractAddress, amount } = params;
 
-    // Fetch branding from Supabase
-    const branding = await getMintingPageLogoAndName(chainId, contractAddress);
+    // Fetch minting page info from Supabase
+    const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
+    // console.log("LOG MIO: mintingPageInfo", mintingPageInfo);
 
     // Default to testnet=true if we can't determine, or follow user preference. 
     // User asked "indicar si es testnet o no en funcion del chainid".
     const testnet = isTestnet(chainId);
 
-    const appName = branding?.name || process.env.APP_NAME || "Next x402 Demo";
-    const appLogo = formatLogoUrl(branding?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
+    const appName = mintingPageInfo?.name || process.env.APP_NAME || "Next x402 Demo";
+    const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
+    const actionName = `Mint ${amount} NFT${amount === "1" ? "" : "s"} from ${mintingPageInfo?.name}`;
+    // console.log("LOG MIO: appName", appName);
+    // console.log("LOG MIO: appLogo", appLogo);
 
     const dynamicPaywall = createPaywall()
         .withNetwork(evmPaywall)
@@ -231,14 +245,19 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         })
         .build();
 
+    // console.log("LOG MIO: dynamicPaywall", dynamicPaywall);
+
     const chain = chainId === "84532" ? baseSepolia : base;
+    // console.log("LOG MIO: chain", chain);
     const protectedHandler = withX402(
         ((req: NextRequest) => handler(req, chain)) as any,
-        getMintNftX402Config(chain, `eip155:${chainId}`, contractAddress, amount) as any,
+        getMintNftX402Config(actionName, chain, `eip155:${chainId}`, contractAddress, amount) as any,
         server,
         undefined,
         dynamicPaywall
     );
+
+    // console.log("LOG MIO: protectedHandler", protectedHandler);
 
     return protectedHandler(req);
 }
