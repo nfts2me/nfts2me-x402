@@ -6,7 +6,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { server } from "../../../../../../proxy";
 import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
-import { createPaywall, evmPaywall } from "@x402/paywall";
+import { createPaywall } from '@x402/paywall';
+import { evmPaywall } from '@x402/paywall/evm';
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
@@ -194,7 +195,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
         description: actionName,
         mimeType: "application/json",
         extensions: {
-            bazaar: { // 666 nota alberto, revisar bazaar aquí https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer
+            bazaar: { // 666 nota alberto, revisar bazaar aquí https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer y aquí: https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer#adding-metadata 
                 discoverable: true,
                 category: "nfts",
                 tags: ["mint", "nft", "nfts", "erc721"],
