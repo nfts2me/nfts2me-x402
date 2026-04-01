@@ -1,37 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withX402 } from "@x402/next";
 // import { declareDiscoveryExtension } from "@x402/extensions/bazaar";
-import { createWalletClient, createPublicClient, http, formatUnits, Chain } from "viem";
+import { createWalletClient, createPublicClient, http, formatUnits, Chain, encodeFunctionData } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { server } from "../../../../../../proxy";
 import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
+import {
+    ERC20_ALLOWANCE_ABI,
+    readMintContractDataWithMulticall,
+    readMintContractDataWithOptimisticAllowance,
+    validateMintPaymentConfiguration,
+} from "../../../../../../lib/mintContractReads";
 
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
-const USDC_ADDRESSES: Record<number, `0x${string}`> = {
-    8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Base
-    84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", // Base Sepolia
-};
+const MINT_GAS_LIMIT = BigInt(process.env.MINT_GAS_LIMIT ?? "900000");
+const APPROVE_GAS_LIMIT = BigInt(process.env.APPROVE_GAS_LIMIT ?? "100000");
 
-
-const ABI_CHECKS = [
-    { inputs: [], name: "protocolFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
-    { inputs: [], name: "erc20PaymentAddress", outputs: [{ type: "address" }], type: "function", stateMutability: "view" },
-    { inputs: [{ type: "uint256", name: "amount" }], name: "mintFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
-    { inputs: [], name: "name", outputs: [{ type: "string" }], type: "function", stateMutability: "view" }
-] as const;
 
 /**
- * Weather API endpoint handler
+ * NFT API endpoint handler
  *
- * This handler returns weather data after payment verification.
+ * This handler mints x amount of NFTs after payment verification.
  * Payment is only settled after a successful response (status < 400).
  *
  * @param req - Incoming Next.js request
- * @returns JSON response with weather data
+ * @returns JSON response with NFT mint result or error message
  */
 // Define the expected response type based on the report example
 type SuccessResponse = {
@@ -41,11 +38,13 @@ type SuccessResponse = {
     image?: string | null;
 };
 
-const handler = async (req: NextRequest, chain: Chain) => {
+const handler = async (
+    req: NextRequest,
+    chain: Chain,
+    contractAddress: string,
+    amountStr: string
+) => {
     try {
-        const segments = req.url.split("/");
-        const contractAddress = segments.at(-2)!;
-        const amountStr = segments.at(-1)!;
         const amount = BigInt(amountStr || "1");
 
         // We re-use validation or assume validation passed due to paywall check, 
@@ -54,39 +53,6 @@ const handler = async (req: NextRequest, chain: Chain) => {
             chain,
             transport: http()
         });
-        const [protocolFee, contractPaymentAddress, mintFee] = await Promise.all([
-            publicClient.readContract({
-                address: contractAddress as `0x${string}`,
-                abi: ABI_CHECKS,
-                functionName: "protocolFee"
-            }),
-            publicClient.readContract({
-                address: contractAddress as `0x${string}`,
-                abi: ABI_CHECKS,
-                functionName: "erc20PaymentAddress"
-            }),
-            publicClient.readContract({
-                address: contractAddress as `0x${string}`,
-                abi: ABI_CHECKS,
-                functionName: "mintFee",
-                args: [amount]
-            })
-        ]);
-
-        const USDC_ADDRESS = USDC_ADDRESSES[chain.id];
-        if (!USDC_ADDRESS) {
-            throw new Error(`USDC address not found for chain ${chain.id}`);
-        }
-
-        if (protocolFee !== 0n) {
-            throw new Error("Protocol fee is not zero");
-        }
-        if (contractPaymentAddress !== USDC_ADDRESS) {
-            throw new Error("ERC20 payment address is not USDC");
-        }
-
-        const erc20PaymentAddress = contractPaymentAddress;
-
         const account = privateKeyToAccount(PRIVATE_KEY);
         const client = createWalletClient({
             account,
@@ -94,32 +60,88 @@ const handler = async (req: NextRequest, chain: Chain) => {
             transport: http(),
         });
 
+        const {
+            protocolFee,
+            erc20PaymentAddress,
+            mintFee,
+            optimisticAllowance,
+            optimisticAllowanceTokenAddress,
+        } = await readMintContractDataWithOptimisticAllowance(
+            publicClient,
+            chain.id,
+            contractAddress as `0x${string}`,
+            amount,
+            account.address,
+            contractAddress as `0x${string}`,
+        );
+
+        console.log("DEBUG: Contract data fetched with optimistic allowance:", { protocolFee, erc20PaymentAddress, mintFee, optimisticAllowance, optimisticAllowanceTokenAddress });
         // Try to get user address from headers (if injected) or fallback to server wallet
         const USER_ADDRESS = (req.headers.get("x-payment-from") || account.address) as `0x${string}`;
 
         console.log("Minting to USER_ADDRESS", USER_ADDRESS);
 
-        const allowance = await publicClient.readContract({
-            address: erc20PaymentAddress,
-            abi: [{ name: "allowance", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] }],
-            functionName: "allowance",
-            args: [account.address, contractAddress as `0x${string}`]
-        }) as bigint;
-        console.log("Allowance: ", allowance, "Mint fee: ", mintFee);
+        let allowance: bigint;
+
+        if (optimisticAllowanceTokenAddress === erc20PaymentAddress && optimisticAllowance !== undefined) {
+            allowance = optimisticAllowance;
+        } else {
+            // Future-proof fallback: if payment token is not the optimistic one, query allowance on the actual token.
+            allowance = await publicClient.readContract({
+                address: erc20PaymentAddress,
+                abi: ERC20_ALLOWANCE_ABI,
+                functionName: "allowance",
+                args: [account.address, contractAddress as `0x${string}`],
+            });
+        }
+
+        // Current business rule: minting requires USDC as payment token.
+        validateMintPaymentConfiguration(chain.id, protocolFee, erc20PaymentAddress);
+
+        
+        // Para poder enviar en el mismo bloque el approve y el mint, tengo que forzar el nonce y el gas en la llamada del approve, y no esperar
+        let nonce = await publicClient.getTransactionCount({ 
+            address: account.address,
+        });
+
+        console.log("Allowance: ", allowance, "Mint fee: ", mintFee, "Nonce: ", nonce);
 
         if (allowance < mintFee) {
             console.log("Approving ERC20...");
-            const hash = await client.writeContract({
+            console.log("Nonce before approval: ", nonce);
+            console.log("Timestamp before approval: ", Date.now());
+
+            // Para poder enviar en el mismo bloque el approve y el mint, tengo que forzar el nonce y el gas en la llamada del approve, y no esperar
+            const hashPromise = client.writeContract({
                 address: erc20PaymentAddress,
                 abi: [{ name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] }],
                 functionName: "approve",
+                gas: APPROVE_GAS_LIMIT,
+                nonce: nonce++, // Lo tengo que forzar para poder enviar las dos TXs a la vez.
                 args: [contractAddress as `0x${string}`, mintFee],
             });
-            // await publicClient.waitForTransactionReceipt({ hash });
-            console.log("Approved!");
+            console.log("Timestamp after approval tx sent: ", Date.now());
+            if (false) {
+                const hash = await hashPromise;
+                // Ya no hace falta por lo del nonce y el gas, que hace que no compruebe nada.
+                await publicClient.waitForTransactionReceipt({ hash });
+                console.log("Approved!");
+
+                // Aquí ya tenemos el approval
+                // leer el nuevo valor de allowance después del approval
+                allowance = await publicClient.readContract({
+                    address: erc20PaymentAddress,
+                    abi: ERC20_ALLOWANCE_ABI,
+                    functionName: "allowance",
+                    args: [account.address, contractAddress as `0x${string}`],
+                });
+                console.log("New allowance after approval: ", allowance);
+            }
+
         }
 
         // Execute Mint
+        console.log("Nonce before minting: ", nonce);
         const hash = await client.writeContract({
             address: contractAddress as `0x${string}`,
             abi: [
@@ -127,8 +149,17 @@ const handler = async (req: NextRequest, chain: Chain) => {
                 { "inputs": [{ "internalType": "address", "name": "to", "type": "address" }, { "internalType": "uint256", "name": "amount", "type": "uint256" }], "name": "mintTo", "outputs": [], "stateMutability": "payable", "type": "function" }
             ],
             functionName: 'mintTo',
+            gas: MINT_GAS_LIMIT,
+            nonce: nonce, // Lo tengo que forzar para poder enviar las dos TXs a la vez.
             args: [USER_ADDRESS, amount]
         });
+
+        // Comprobar que ha ido bien
+        const txReceipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (txReceipt.status !== "success") {
+            console.error("Transaction failed:", txReceipt);
+            return NextResponse.json({ error: "Minting transaction failed" }, { status: 500 }) as unknown as NextResponse<SuccessResponse>;
+        }
 
         return NextResponse.json({
             success: true,
@@ -149,41 +180,20 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
         accepts: [
             {
                 scheme: "exact",
-                price: async (context: any) => {
+                price: async () => {
                     const publicClient = createPublicClient({
                         chain,
                         transport: http()
                     });
 
-                    const [protocolFee, erc20PaymentAddress, mintFee] = await Promise.all([
-                        publicClient.readContract({
-                            address: contractAddress as `0x${string}`,
-                            abi: ABI_CHECKS,
-                            functionName: "protocolFee"
-                        }),
-                        publicClient.readContract({
-                            address: contractAddress as `0x${string}`,
-                            abi: ABI_CHECKS,
-                            functionName: "erc20PaymentAddress"
-                        }),
-                        publicClient.readContract({
-                            address: contractAddress as `0x${string}`,
-                            abi: ABI_CHECKS,
-                            functionName: "mintFee",
-                            args: [BigInt(amount)]
-                        })
-                    ]);
-                    const USDC_ADDRESS = USDC_ADDRESSES[chain.id];
-                    if (!USDC_ADDRESS) {
-                        throw new Error(`USDC address not found for chain ${chain.id}`);
-                    }
-
-                    if (protocolFee !== 0n) {
-                        throw new Error("Protocol fee is not zero");
-                    }
-                    if (erc20PaymentAddress !== USDC_ADDRESS) {
-                        throw new Error("ERC20 payment address is not USDC");
-                    }
+                    const { protocolFee, erc20PaymentAddress, mintFee } =
+                        await readMintContractDataWithMulticall(
+                            publicClient,
+                            chain.id,
+                            contractAddress as `0x${string}`,
+                            BigInt(amount),
+                        );
+                    validateMintPaymentConfiguration(chain.id, protocolFee, erc20PaymentAddress);
                     console.log("DEBUG: Contract data fetched:", { protocolFee, erc20PaymentAddress, mintFee });
 
                     return formatUnits(mintFee, 6);
@@ -194,17 +204,22 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
         ],
         description: actionName,
         mimeType: "application/json",
-        extensions: {
-            bazaar: { // 666 nota alberto, revisar bazaar aquí https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer y aquí: https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer#adding-metadata 
-                discoverable: true,
-                category: "nfts",
-                tags: ["mint", "nft", "nfts", "erc721"],
-            },
-        },
+        // extensions: {
+        //     bazaar: { // 666 nota alberto, revisar bazaar aquí https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer y aquí: https://x402.gitbook.io/x402/core-concepts/bazaar-discovery-layer#adding-metadata 
+        //         discoverable: true,
+        //         category: "nfts",
+        //         tags: ["mint", "nft", "nfts", "erc721"],
+        //     },
+        // },
     };
 }
 
 const TESTNET_CHAIN_IDS = ["84532", "11155111", "80002"];
+
+const SUPPORTED_CHAINS: Record<string, Chain> = {
+    "8453": base,
+    "84532": baseSepolia,
+};
 
 function isTestnet(chainId: string | number): boolean {
     return TESTNET_CHAIN_IDS.includes(String(chainId));
@@ -227,9 +242,18 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
     // console.log("LOG MIO: mintingPageInfo", mintingPageInfo);
 
-    // Default to testnet=true if we can't determine, or follow user preference. 
-    // User asked "indicar si es testnet o no en funcion del chainid".
-    const testnet = isTestnet(chainId);
+    const chain = SUPPORTED_CHAINS[chainId];
+    if (!chain) {
+        return NextResponse.json(
+            {
+                error: `Unsupported chainId: ${chainId}`,
+                supportedChainIds: Object.keys(SUPPORTED_CHAINS),
+            },
+            { status: 400 }
+        );
+    }
+
+    const testnet = isTestnet(chain.id);
 
     const appName = mintingPageInfo?.name || process.env.APP_NAME || "Next x402 Demo";
     const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
@@ -248,12 +272,11 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     // console.log("LOG MIO: dynamicPaywall", dynamicPaywall);
 
-    const chain = chainId === "84532" ? baseSepolia : base;
     // console.log("LOG MIO: chain", chain);
     const protectedHandler = withX402(
-        ((req: NextRequest) => handler(req, chain)) as any,
-        getMintNftX402Config(actionName, chain, `eip155:${chainId}`, contractAddress, amount) as any,
-        server,
+        ((request: NextRequest) => handler(request, chain, contractAddress, amount)) as any,
+        getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount) as any,
+        server as any,
         undefined,
         dynamicPaywall
     );

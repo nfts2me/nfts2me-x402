@@ -4,29 +4,33 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:polling": "CHOKIDAR_USEPOLLING=1 WATCHPACK_POLLING=true next dev",
+    "dev:webpack": "next dev --webpack",
+    "dev:polling-webpack": "CHOKIDAR_USEPOLLING=1 WATCHPACK_POLLING=true next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
-    "@coinbase/x402": "^2.0.0",
-    "@supabase/supabase-js": "^2.89.0",
-    "@x402/evm": "^2.0.0",
-    "@x402/next": "^2.0.0",
-    "@x402/paywall": "^2.0.0",
-    "next": "^16.0.10",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "viem": "^2.41.2"
+    "@coinbase/x402": "^2.1.0",
+    "@supabase/supabase-js": "^2.101.1",
+    "@x402/evm": "^2.8.0",
+    "@x402/next": "^2.8.0",
+    "@x402/paywall": "^2.8.0",
+    "next": "^16.2.2",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "viem": "^2.47.6"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^18.3.27",
-    "@types/react-dom": "^18.3.7",
-    "eslint": "^9",
-    "eslint-config-next": "^15.5.7",
+    "@types/node": "^25",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^10",
+    "eslint-config-next": "^16.2.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
-  }
+    "typescript": "^6"
+  },
+  "packageManager": "pnpm@10.33.0"
 }
