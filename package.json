@@ -14,6 +14,7 @@
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
     "@supabase/supabase-js": "^2.106.2",
+    "@x402/core": "^2.14.0",
     "@x402/evm": "^2.14.0",
     "@x402/next": "^2.14.0",
     "@x402/paywall": "^2.14.0",
