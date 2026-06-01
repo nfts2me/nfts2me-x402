@@ -40,19 +40,20 @@ Limitaciones y pendientes actuales:
 
 ## Arquitectura (resumen)
 
-1. `proxy.ts`
-	- Inicializa `x402ResourceServer` y esquema EVM exact.
-	- Configura `paymentProxy` para rutas protegidas de ejemplo.
-2. `app/api/mint/.../route.ts`
+1. `app/api/mint/.../route.ts` (`Protecting API Routes. Vía https://github.com/x402-foundation/x402/tree/main/typescript/packages/http/next#protecting-api-routes`)
 	- Usa `withX402`.
 	- Calcula precio dinámico leyendo `mintFee` del contrato.
 	- Ejecuta aprobación (si aplica) y `mintTo` con wallet del servidor.
-3. `app/api/mint02/.../route.ts`
+2. `app/api/mint02/.../route.ts`
 	- Usa `withX402VerifyOnly`.
 	- Verifica pago y devuelve autorización EIP-3009 para settle atómico on-chain.
-4. `lib/supabase.ts`
+3. `lib/supabase.ts`
 	- Obtiene `ipfs_logo` y `name` de `MintingPages`.
 	- Cachea respuesta 24h con `unstable_cache`.
+4. `proxy.ts` (Para proteger Page routes. Vía https://github.com/coinbase/x402/tree/main/typescript/packages/http/next#x402next . Realmente es una prueba de concepto, pero no nos resulta útil para nosotros usar el 'paymentProxy', porque no queremos proteger una página). El pago puede que llegue en el mismo bloque por la preconfirmación, o en el siguiente. WARNING!!
+	- Inicializa `x402ResourceServer` y esquema EVM exact.
+	- Configura `paymentProxy` para rutas protegidas de ejemplo.
+
 
 ## Requisitos
 

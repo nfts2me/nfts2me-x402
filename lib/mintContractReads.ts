@@ -93,6 +93,7 @@ export async function readMintContractDataWithMulticall(
     return { protocolFee, erc20PaymentAddress, mintFee };
 }
 
+// El allowance es optimistic en el sentido de que suponemos que siempre va a ser USDC. Si no, abajo se soluciona.
 export async function readMintContractDataWithOptimisticAllowance(
     publicClient: ReturnType<typeof createPublicClient>,
     chainId: number,

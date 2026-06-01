@@ -22,10 +22,24 @@ const APPROVE_GAS_LIMIT = BigInt(process.env.APPROVE_GAS_LIMIT ?? "100000");
 
 
 /**
+ * 
  * NFT API endpoint handler
  *
+ * Protecting API Routes. Vía https://github.com/x402-foundation/x402/tree/main/typescript/packages/http/next#protecting-api-routes (antiguamente --> https://github.com/coinbase/x402/tree/main/typescript/packages/http/next#protecting-api-routes)
+ *                            
+ * Realmente lo que hacemos es proteger una API que es la que hace el minteo.
+ * PROBLEMA? 
+ * Settle se hace después del mint. 
+ * Primero mira, lo llama habiendo validado la cantidad, se hace el mint, y luego se cobra.
+ * WARNING: El pago puede que llegue en el mismo bloque por la preconfirmación, o en el siguiente.
+ * En parte nos la jugamos un poco.
+ * 
+ * This is the recommended approach to protect API routes as it guarantees payment settlement only AFTER successful API responses (status < 400).
+ * 
  * This handler mints x amount of NFTs after payment verification.
  * Payment is only settled after a successful response (status < 400).
+ * 
+ * 
  *
  * @param req - Incoming Next.js request
  * @returns JSON response with NFT mint result or error message
@@ -60,6 +74,7 @@ const handler = async (
             transport: http(),
         });
 
+        // El allowance es optimistic en el sentido de que suponemos que siempre va a ser USDC. Si no, abajo se soluciona.
         const {
             protocolFee,
             erc20PaymentAddress,
@@ -276,9 +291,10 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     const protectedHandler = withX402(
         ((request: NextRequest) => handler(request, chain, contractAddress, amount)) as any,
         getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount) as any,
-        server as any,
-        undefined,
-        dynamicPaywall
+        server as any, //   server: x402ResourceServer,
+        undefined, // paywallConfig?: PaywallConfig,
+        dynamicPaywall, //   paywall?: PaywallProvider,
+        // syncFacilitatorOnStart?: boolean (defaults to true)
     );
 
     // console.log("LOG MIO: protectedHandler", protectedHandler);
