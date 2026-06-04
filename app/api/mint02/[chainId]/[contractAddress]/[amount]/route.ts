@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, http, formatUnits, Chain } from "viem";
+import { createPublicClient, createWalletClient, http, formatUnits, Chain } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { server } from "../../../../../../proxy";
 import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
@@ -9,6 +10,8 @@ import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, validateMintPaymentConfiguration } from "../../../../../../lib/mintContractReads";
 
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
+const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
+const FORWARDER_CONTRACT_ADDRESS = "0x58C94dDa09A070cF40CB024fCeC7aB04f7223609" as `0x${string}`;
 
 /**
  * Verify-only mint handler response type
@@ -69,12 +72,68 @@ const handler = async (
         console.log("From:", ctx.paymentAuth.authorization.from);
         console.log("To:", ctx.paymentAuth.authorization.to);
         console.log("Value:", ctx.paymentAuth.authorization.value);
+        
+        const account = privateKeyToAccount(PRIVATE_KEY);
+        const walletClient = createWalletClient({
+            account,
+            chain,
+            transport: http(),
+        });
+
+        const mintWithAuthorizationAbi = [{
+            "inputs": [
+                { "internalType": "address", "name": "erc20CollectionPaymentAddress", "type": "address" },
+                { "internalType": "address", "name": "collection", "type": "address" },
+                { "internalType": "uint256", "name": "erc20Amount", "type": "uint256" },
+                { "internalType": "address", "name": "payer", "type": "address" },
+                { "internalType": "uint256", "name": "validAfter", "type": "uint256" },
+                { "internalType": "uint256", "name": "validBefore", "type": "uint256" },
+                { "internalType": "bytes32", "name": "nonce", "type": "bytes32" },
+                { "internalType": "uint8", "name": "v", "type": "uint8" },
+                { "internalType": "bytes32", "name": "r", "type": "bytes32" },
+                { "internalType": "bytes32", "name": "s", "type": "bytes32" },
+                { "internalType": "address", "name": "to", "type": "address" },
+                { "internalType": "uint256", "name": "nftAmount", "type": "uint256" }
+            ],
+            "name": "mintWithAuthorization",
+            "outputs": [],
+            "stateMutability": "payable",
+            "type": "function"
+        }];
+
+        const hash = await walletClient.writeContract({
+            address: FORWARDER_CONTRACT_ADDRESS,
+            abi: mintWithAuthorizationAbi,
+            functionName: 'mintWithAuthorization',
+            args: [
+                USDC_ADDRESS as `0x${string}`,
+                contractAddress as `0x${string}`,
+                BigInt(ctx.paymentAuth.authorization.value),
+                ctx.paymentAuth.authorization.from as `0x${string}`,
+                BigInt(ctx.paymentAuth.authorization.validAfter),
+                BigInt(ctx.paymentAuth.authorization.validBefore),
+                ctx.paymentAuth.authorization.nonce as `0x${string}`,
+                parseInt(ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(130, 132) : ctx.paymentAuth.signature.slice(128, 130), 16),
+                (ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(0, 66) : `0x${ctx.paymentAuth.signature.slice(0, 64)}`) as `0x${string}`,
+                (ctx.paymentAuth.signature.startsWith("0x") ? `0x${ctx.paymentAuth.signature.slice(66, 130)}` : `0x${ctx.paymentAuth.signature.slice(64, 128)}`) as `0x${string}`,
+                ctx.paymentAuth.authorization.from as `0x${string}`, // Minting to the payer
+                amount
+            ]
+        });
+
+        // Comprobar que ha ido bien
+        const txReceipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (txReceipt.status !== "success") {
+            console.error("Transaction failed:", txReceipt);
+            throw new Error("Minting transaction failed");
+        }
+        console.log("Minting transaction successful! Hash:", hash);
 
         // Return the authorization data for on-chain execution
         // The client/contract can use this to call transferWithAuthorization atomically
         return NextResponse.json({
             success: true,
-            message: "Payment verified! Use the authorization data to execute transferWithAuthorization on-chain.",
+            message: "Payment verified and minted on-chain!",
             authorization: ctx.paymentAuth,
             mintParams: {
                 chainId: String(chain.id),
@@ -126,7 +185,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                     return formatUnits(mintFee, 6);
                 },
                 network,
-                payTo: EVM_ADDRESS,
+                payTo: FORWARDER_CONTRACT_ADDRESS,
             },
         ],
         description: actionName,
