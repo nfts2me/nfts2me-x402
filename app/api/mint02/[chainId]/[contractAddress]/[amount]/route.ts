@@ -7,7 +7,7 @@ import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
 import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
-import { readMintContractDataWithMulticall, validateMintPaymentConfiguration } from "../../../../../../lib/mintContractReads";
+import { readMintContractDataWithMulticall, validateMintPaymentConfiguration, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../../lib/mintContractReads";
 
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
@@ -150,6 +150,7 @@ const handler = async (
                 contractAddress,
                 amount: amountStr,
                 mintFee: mintFee.toString(),
+                protocolFee: protocolFee.toString(),
                 commissionEnabled: COMMISSION_ENABLED,
                 commissionAmount: COMMISSION_ENABLED ? COMMISSION_AMOUNT.toString() : "0",
                 commissionDecimals: COMMISSION_DECIMALS,
