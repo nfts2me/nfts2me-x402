@@ -11,7 +11,7 @@ import { readMintContractDataWithMulticall, validateMintPaymentConfiguration } f
 
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
-const FORWARDER_CONTRACT_ADDRESS = "0x58C94dDa09A070cF40CB024fCeC7aB04f7223609" as `0x${string}`;
+const FORWARDER_CONTRACT_ADDRESS = "0xefD900A1e5897Ef8d9F0F72bd7F8cd1Fc7406eF2" as `0x${string}`;
 
 const COMMISSION_ENABLED = (() => {
     const raw = process.env.COMMISSION_ENABLED?.trim().toLowerCase();
@@ -114,17 +114,17 @@ const handler = async (
             abi: mintWithAuthorizationAbi,
             functionName: 'mintWithAuthorization',
             args: [
-                USDC_ADDRESS as `0x${string}`,
-                contractAddress as `0x${string}`,
-                BigInt(ctx.paymentAuth.authorization.value),
-                ctx.paymentAuth.authorization.from as `0x${string}`,
-                BigInt(ctx.paymentAuth.authorization.validAfter),
-                BigInt(ctx.paymentAuth.authorization.validBefore),
-                ctx.paymentAuth.authorization.nonce as `0x${string}`,
-                parseInt(ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(130, 132) : ctx.paymentAuth.signature.slice(128, 130), 16),
-                (ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(0, 66) : `0x${ctx.paymentAuth.signature.slice(0, 64)}`) as `0x${string}`,
-                (ctx.paymentAuth.signature.startsWith("0x") ? `0x${ctx.paymentAuth.signature.slice(66, 130)}` : `0x${ctx.paymentAuth.signature.slice(64, 128)}`) as `0x${string}`,
-                ctx.paymentAuth.authorization.from as `0x${string}`, // Minting to the payer
+                USDC_ADDRESS as `0x${string}`, // erc20CollectionPaymentAddress
+                contractAddress as `0x${string}`, // collection
+                BigInt(ctx.paymentAuth.authorization.value), // erc20Amount
+                ctx.paymentAuth.authorization.from as `0x${string}`, // payer
+                BigInt(ctx.paymentAuth.authorization.validAfter), // validAfter
+                BigInt(ctx.paymentAuth.authorization.validBefore), // validBefore
+                ctx.paymentAuth.authorization.nonce as `0x${string}`, // nonce
+                parseInt(ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(130, 132) : ctx.paymentAuth.signature.slice(128, 130), 16), // v
+                (ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(0, 66) : `0x${ctx.paymentAuth.signature.slice(0, 64)}`) as `0x${string}`, // r
+                (ctx.paymentAuth.signature.startsWith("0x") ? `0x${ctx.paymentAuth.signature.slice(66, 130)}` : `0x${ctx.paymentAuth.signature.slice(64, 128)}`) as `0x${string}`, // s
+                ctx.paymentAuth.authorization.from as `0x${string}`, // `to` --> Minting to the payer
                 amount
             ]
         });
