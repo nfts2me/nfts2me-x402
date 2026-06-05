@@ -40,9 +40,6 @@ export type VerifyOnlyHandler<T = unknown> = (
     context: VerifyOnlyContext
 ) => Promise<NextResponse<T>>;
 
-// Cache for HTTP resource servers
-const httpServerCache = new Map<x402ResourceServer, x402HTTPResourceServer>();
-
 /**
  * Wraps a Next.js App Router API route handler with x402 payment verification ONLY.
  * 
@@ -74,20 +71,18 @@ export function withX402VerifyOnly<T = unknown>(
     routeHandler: VerifyOnlyHandler<T>,
     routeConfig: RouteConfig,
     server: x402ResourceServer,
+    routePattern: string = "*",
     paywallConfig?: PaywallConfig,
     paywall?: PaywallProvider,
     syncFacilitatorOnStart: boolean = true
 ): (request: NextRequest) => Promise<NextResponse<T>> {
-    // Create or reuse HTTP resource server
-    let httpServer = httpServerCache.get(server);
-    if (!httpServer) {
-        // Create minimal routes config for HTTP server
-        const routesConfig = {
-            "*": routeConfig, // Use wildcard since we handle routing ourselves
-        };
-        httpServer = new x402HTTPResourceServer(server, routesConfig);
-        httpServerCache.set(server, httpServer);
-    }
+    // Create an HTTP resource server for this route config.
+    // Do not reuse a cached instance when routeConfig can change between requests,
+    // otherwise route payment requirements (price, extensions, etc.) become stale.
+    const routesConfig = {
+        [routePattern]: routeConfig,
+    };
+    const httpServer = new x402HTTPResourceServer(server, routesConfig);
 
     // Track initialization
     let initialized = false;

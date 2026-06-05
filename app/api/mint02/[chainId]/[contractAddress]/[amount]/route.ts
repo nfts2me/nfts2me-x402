@@ -13,6 +13,14 @@ const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const FORWARDER_CONTRACT_ADDRESS = "0x58C94dDa09A070cF40CB024fCeC7aB04f7223609" as `0x${string}`;
 
+const COMMISSION_ENABLED = (() => {
+    const raw = process.env.COMMISSION_ENABLED?.trim().toLowerCase();
+    if (raw === undefined) return true; // enabled by default
+    return raw === "true" || raw === "1" || raw === "yes";
+})();
+const COMMISSION_AMOUNT = BigInt(process.env.COMMISSION_AMOUNT ?? "20000");
+const COMMISSION_DECIMALS = Number(process.env.COMMISSION_DECIMALS ?? "6");
+
 /**
  * Verify-only mint handler response type
  * 
@@ -121,6 +129,8 @@ const handler = async (
             ]
         });
 
+        console.log("Minting transaction sent. Hash:", hash);
+
         // Comprobar que ha ido bien
         const txReceipt = await publicClient.waitForTransactionReceipt({ hash });
         if (txReceipt.status !== "success") {
@@ -140,6 +150,9 @@ const handler = async (
                 contractAddress,
                 amount: amountStr,
                 mintFee: mintFee.toString(),
+                commissionEnabled: COMMISSION_ENABLED,
+                commissionAmount: COMMISSION_ENABLED ? COMMISSION_AMOUNT.toString() : "0",
+                commissionDecimals: COMMISSION_DECIMALS,
                 usdcAddress: USDC_ADDRESS,
             },
         });
@@ -180,9 +193,11 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                         );
 
                     validateMintPaymentConfiguration(chain.id, protocolFee, erc20PaymentAddress);
-                    console.log("DEBUG: Contract data fetched:", { protocolFee, erc20PaymentAddress, mintFee });
+                    const commission = COMMISSION_ENABLED ? COMMISSION_AMOUNT : 0n;
+                    const price = mintFee + commission;
+                    console.log("DEBUG: Contract data fetched:", { protocolFee, erc20PaymentAddress, mintFee, commission, commissionEnabled: COMMISSION_ENABLED });
 
-                    return formatUnits(mintFee, 6);
+                    return formatUnits(price, COMMISSION_DECIMALS);
                 },
                 network,
                 payTo: FORWARDER_CONTRACT_ADDRESS,
@@ -258,6 +273,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount),
         getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount) as any,
         server,
+        "/api/mint02/:chainId/:contractAddress/:amount",
         undefined,
         dynamicPaywall
     );
