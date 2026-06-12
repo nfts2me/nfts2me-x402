@@ -7,11 +7,12 @@ import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
 import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
-import { readMintContractDataWithMulticall, validateMintPaymentConfiguration, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../../lib/mintContractReads";
+import { readMintContractDataWithMulticall, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../../lib/mintContractReads";
 
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
-const FORWARDER_CONTRACT_ADDRESS = "0xefD900A1e5897Ef8d9F0F72bd7F8cd1Fc7406eF2" as `0x${string}`;
+const FORWARDER_CONTRACT_ADDRESS = "0x13F1d247d175dBd1984E2F61698361B32824bcF0" as `0x${string}`; // Versión con swap y quote.
+
 
 const COMMISSION_ENABLED = (() => {
     const raw = process.env.COMMISSION_ENABLED?.trim().toLowerCase();
@@ -37,6 +38,10 @@ type VerifyOnlyResponse = {
         contractAddress: string;
         amount: string;
         mintFee: string;
+        protocolFee: string;
+        commissionEnabled: boolean;
+        commissionAmount: string;
+        commissionDecimals: number;
         usdcAddress: string;
     };
 };
@@ -49,6 +54,34 @@ type VerifyOnlyResponse = {
  * 2. Executes the minting operation
  * 3. Reverts everything if either step fails
  */
+async function convertEthToUsdc(
+    publicClient: ReturnType<typeof createPublicClient>,
+    poolAddress: `0x${string}`,
+    ethAmount: bigint
+): Promise<bigint> {
+    if (ethAmount === 0n) return 0n;
+
+    const quoteAbi = [{
+        "inputs": [
+            { "internalType": "address", "name": "pool", "type": "address" },
+            { "internalType": "uint256", "name": "nativeAmount", "type": "uint256" }
+        ],
+        "name": "quoteUSDCForNative",
+        "outputs": [{ "internalType": "uint256", "name": "usdcAmount", "type": "uint256" }],
+        "stateMutability": "view",
+        "type": "function"
+    }] as const;
+
+    const usdcAmount = await publicClient.readContract({
+        address: FORWARDER_CONTRACT_ADDRESS,
+        abi: quoteAbi,
+        functionName: "quoteUSDCForNative",
+        args: [poolAddress, ethAmount],
+    });
+
+    return usdcAmount;
+}
+
 const handler = async (
     ctx: VerifyOnlyContext,
     chain: Chain,
@@ -64,15 +97,19 @@ const handler = async (
         });
 
         // Fetch contract data for validation via a single multicall.
-        const { protocolFee, erc20PaymentAddress: contractPaymentAddress, mintFee } =
+        const { protocolFee: protocolFeeForOne, erc20PaymentAddress: contractPaymentAddress, mintFee } =
             await readMintContractDataWithMulticall(
                 publicClient,
                 chain.id,
                 contractAddress as `0x${string}`,
                 amount,
             );
+        const totalProtocolFee = protocolFeeForOne * amount;
 
-        const USDC_ADDRESS = validateMintPaymentConfiguration(chain.id, protocolFee, contractPaymentAddress);
+        const USDC_ADDRESS = getUsdcAddress(chain.id);
+        if (contractPaymentAddress !== USDC_ADDRESS && contractPaymentAddress !== ZERO_ADDRESS) {
+            throw new Error("Unsupported payment token. Only USDC and Native ETH are supported.");
+        }
 
         // Log the authorization data for debugging
         console.log("VERIFY-ONLY HANDLER: Payment verified!");
@@ -80,7 +117,7 @@ const handler = async (
         console.log("From:", ctx.paymentAuth.authorization.from);
         console.log("To:", ctx.paymentAuth.authorization.to);
         console.log("Value:", ctx.paymentAuth.authorization.value);
-        
+
         const account = privateKeyToAccount(PRIVATE_KEY);
         const walletClient = createWalletClient({
             account,
@@ -88,45 +125,171 @@ const handler = async (
             transport: http(),
         });
 
-        const mintWithAuthorizationAbi = [{
-            "inputs": [
-                { "internalType": "address", "name": "erc20CollectionPaymentAddress", "type": "address" },
-                { "internalType": "address", "name": "collection", "type": "address" },
-                { "internalType": "uint256", "name": "erc20Amount", "type": "uint256" },
-                { "internalType": "address", "name": "payer", "type": "address" },
-                { "internalType": "uint256", "name": "validAfter", "type": "uint256" },
-                { "internalType": "uint256", "name": "validBefore", "type": "uint256" },
-                { "internalType": "bytes32", "name": "nonce", "type": "bytes32" },
-                { "internalType": "uint8", "name": "v", "type": "uint8" },
-                { "internalType": "bytes32", "name": "r", "type": "bytes32" },
-                { "internalType": "bytes32", "name": "s", "type": "bytes32" },
-                { "internalType": "address", "name": "to", "type": "address" },
-                { "internalType": "uint256", "name": "nftAmount", "type": "uint256" }
-            ],
-            "name": "mintWithAuthorization",
-            "outputs": [],
-            "stateMutability": "payable",
-            "type": "function"
-        }];
+        const forwarderAbi = [
+            {
+                "inputs": [
+                    { "internalType": "address", "name": "erc20CollectionPaymentAddress", "type": "address" },
+                    { "internalType": "address", "name": "collection", "type": "address" },
+                    { "internalType": "uint256", "name": "erc20Amount", "type": "uint256" },
+                    { "internalType": "address", "name": "payer", "type": "address" },
+                    { "internalType": "uint256", "name": "validAfter", "type": "uint256" },
+                    { "internalType": "uint256", "name": "validBefore", "type": "uint256" },
+                    { "internalType": "bytes32", "name": "nonce", "type": "bytes32" },
+                    { "internalType": "uint8", "name": "v", "type": "uint8" },
+                    { "internalType": "bytes32", "name": "r", "type": "bytes32" },
+                    { "internalType": "bytes32", "name": "s", "type": "bytes32" },
+                    { "internalType": "address", "name": "to", "type": "address" },
+                    { "internalType": "uint256", "name": "nftAmount", "type": "uint256" }
+                ],
+                "name": "mintWithAuthorization",
+                "outputs": [],
+                "stateMutability": "payable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    { "internalType": "address", "name": "erc20CollectionPaymentAddress", "type": "address" },
+                    { "internalType": "address", "name": "collection", "type": "address" },
+                    { "internalType": "address", "name": "pool", "type": "address" },
+                    { "internalType": "uint256", "name": "erc20Amount", "type": "uint256" },
+                    { "internalType": "uint256", "name": "mintingFeeAmount", "type": "uint256" },
+                    { "internalType": "address", "name": "payer", "type": "address" },
+                    { "internalType": "uint256", "name": "validAfter", "type": "uint256" },
+                    { "internalType": "uint256", "name": "validBefore", "type": "uint256" },
+                    { "internalType": "bytes32", "name": "nonce", "type": "bytes32" },
+                    { "internalType": "uint8", "name": "v", "type": "uint8" },
+                    { "internalType": "bytes32", "name": "r", "type": "bytes32" },
+                    { "internalType": "bytes32", "name": "s", "type": "bytes32" },
+                    { "internalType": "address", "name": "to", "type": "address" },
+                    { "internalType": "uint256", "name": "nftAmount", "type": "uint256" }
+                ],
+                "name": "mintWithAuthorizationNative",
+                "outputs": [],
+                "stateMutability": "payable",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    { "internalType": "address", "name": "erc20CollectionPaymentAddress", "type": "address" },
+                    { "internalType": "address", "name": "collection", "type": "address" },
+                    { "internalType": "address", "name": "pool", "type": "address" },
+                    { "internalType": "uint256", "name": "erc20Amount", "type": "uint256" },
+                    { "internalType": "uint256", "name": "protocolFeeAmount", "type": "uint256" },
+                    { "internalType": "uint256", "name": "erc20MintingFeeAmount", "type": "uint256" },
+                    { "internalType": "address", "name": "payer", "type": "address" },
+                    { "internalType": "uint256", "name": "validAfter", "type": "uint256" },
+                    { "internalType": "uint256", "name": "validBefore", "type": "uint256" },
+                    { "internalType": "bytes32", "name": "nonce", "type": "bytes32" },
+                    { "internalType": "uint8", "name": "v", "type": "uint8" },
+                    { "internalType": "bytes32", "name": "r", "type": "bytes32" },
+                    { "internalType": "bytes32", "name": "s", "type": "bytes32" },
+                    { "internalType": "address", "name": "to", "type": "address" },
+                    { "internalType": "uint256", "name": "nftAmount", "type": "uint256" }
+                ],
+                "name": "mintWithAuthorizationUSDCWithNativeProtocolFee",
+                "outputs": [],
+                "stateMutability": "payable",
+                "type": "function"
+            }
+        ] as const;
 
+        const isErc20Usdc = contractPaymentAddress.toLowerCase() === USDC_ADDRESS.toLowerCase();
+        const isErc20Native = contractPaymentAddress === ZERO_ADDRESS;
+
+        let functionName: 'mintWithAuthorization' | 'mintWithAuthorizationNative' | 'mintWithAuthorizationUSDCWithNativeProtocolFee';
+        let args: any[];
+
+        // Extract signature components
+        const v = parseInt(ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(130, 132) : ctx.paymentAuth.signature.slice(128, 130), 16);
+        const r = (ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(0, 66) : `0x${ctx.paymentAuth.signature.slice(0, 64)}`) as `0x${string}`;
+        const s = (ctx.paymentAuth.signature.startsWith("0x") ? `0x${ctx.paymentAuth.signature.slice(66, 130)}` : `0x${ctx.paymentAuth.signature.slice(64, 128)}`) as `0x${string}`;
+
+        const erc20Amount = BigInt(ctx.paymentAuth.authorization.value);
+        const payer = ctx.paymentAuth.authorization.from as `0x${string}`;
+        const validAfter = BigInt(ctx.paymentAuth.authorization.validAfter);
+        const validBefore = BigInt(ctx.paymentAuth.authorization.validBefore);
+        const nonce = ctx.paymentAuth.authorization.nonce as `0x${string}`;
+        const to = ctx.paymentAuth.authorization.from as `0x${string}`;
+
+        if (isErc20Usdc) {
+            if (totalProtocolFee === 0n) {
+                console.log("Case 1: USDC, no protocol fee");
+                // Case 1: USDC, no protocol fee
+                functionName = 'mintWithAuthorization';
+                args = [
+                    USDC_ADDRESS,
+                    contractAddress as `0x${string}`,
+                    erc20Amount,
+                    payer,
+                    validAfter,
+                    validBefore,
+                    nonce,
+                    v,
+                    r,
+                    s,
+                    to,
+                    amount
+                ];
+            } else {
+                console.log("Case 2: USDC, with protocol fee (native ETH)");
+                // Case 2: USDC, with protocol fee (native ETH)
+                const poolAddress = getWETHUSDCPoolAddress(chain.id);
+                functionName = 'mintWithAuthorizationUSDCWithNativeProtocolFee';
+                args = [
+                    USDC_ADDRESS,
+                    contractAddress as `0x${string}`,
+                    poolAddress,
+                    erc20Amount,
+                    totalProtocolFee,
+                    mintFee,
+                    payer,
+                    validAfter,
+                    validBefore,
+                    nonce,
+                    v,
+                    r,
+                    s,
+                    to,
+                    amount
+                ];
+            }
+        } else if (isErc20Native) {
+            if (totalProtocolFee === 0n) {
+                console.log("Case 3: Native ETH, no protocol fee");
+            } else {
+                console.log("Case 4: Native ETH, with protocol fee (native ETH)");
+            }
+            // Case 3 & 4: Native ETH
+            const poolAddress = getWETHUSDCPoolAddress(chain.id);
+            const mintingFeeAmount = totalProtocolFee === 0n ? mintFee : mintFee + totalProtocolFee;
+            functionName = 'mintWithAuthorizationNative';
+            args = [
+                USDC_ADDRESS,
+                contractAddress as `0x${string}`,
+                poolAddress,
+                erc20Amount,
+                mintingFeeAmount,
+                payer,
+                validAfter,
+                validBefore,
+                nonce,
+                v,
+                r,
+                s,
+                to,
+                amount
+            ];
+            console.log("DEBUG: Args: ", args);
+        } else {
+            throw new Error("Invalid payment configuration");
+        }
+
+        console.log("Before sending transaction");
         const hash = await walletClient.writeContract({
             address: FORWARDER_CONTRACT_ADDRESS,
-            abi: mintWithAuthorizationAbi,
-            functionName: 'mintWithAuthorization',
-            args: [
-                USDC_ADDRESS as `0x${string}`, // erc20CollectionPaymentAddress
-                contractAddress as `0x${string}`, // collection
-                BigInt(ctx.paymentAuth.authorization.value), // erc20Amount
-                ctx.paymentAuth.authorization.from as `0x${string}`, // payer
-                BigInt(ctx.paymentAuth.authorization.validAfter), // validAfter
-                BigInt(ctx.paymentAuth.authorization.validBefore), // validBefore
-                ctx.paymentAuth.authorization.nonce as `0x${string}`, // nonce
-                parseInt(ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(130, 132) : ctx.paymentAuth.signature.slice(128, 130), 16), // v
-                (ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(0, 66) : `0x${ctx.paymentAuth.signature.slice(0, 64)}`) as `0x${string}`, // r
-                (ctx.paymentAuth.signature.startsWith("0x") ? `0x${ctx.paymentAuth.signature.slice(66, 130)}` : `0x${ctx.paymentAuth.signature.slice(64, 128)}`) as `0x${string}`, // s
-                ctx.paymentAuth.authorization.from as `0x${string}`, // `to` --> Minting to the payer
-                amount
-            ]
+            abi: forwarderAbi as any,
+            functionName: functionName as any,
+            args: args as any
         });
 
         console.log("Minting transaction sent. Hash:", hash);
@@ -138,6 +301,7 @@ const handler = async (
             throw new Error("Minting transaction failed");
         }
         console.log("Minting transaction successful! Hash:", hash);
+        const etherscanTxUrl = `${chain.blockExplorers?.default.url}/tx/${hash}`;
 
         // Return the authorization data for on-chain execution
         // The client/contract can use this to call transferWithAuthorization atomically
@@ -150,12 +314,14 @@ const handler = async (
                 contractAddress,
                 amount: amountStr,
                 mintFee: mintFee.toString(),
-                protocolFee: protocolFee.toString(),
+                protocolFee: totalProtocolFee.toString(),
                 commissionEnabled: COMMISSION_ENABLED,
                 commissionAmount: COMMISSION_ENABLED ? COMMISSION_AMOUNT.toString() : "0",
                 commissionDecimals: COMMISSION_DECIMALS,
                 usdcAddress: USDC_ADDRESS,
             },
+            mintTxHash: hash,
+            etherscanTxUrl: etherscanTxUrl,
         });
 
     } catch (error) {
@@ -185,7 +351,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                         transport: http()
                     });
 
-                    const { protocolFee, erc20PaymentAddress, mintFee } =
+                    const { protocolFee: protocolFeeForOne, erc20PaymentAddress, mintFee } =
                         await readMintContractDataWithMulticall(
                             publicClient,
                             chain.id,
@@ -193,10 +359,46 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                             BigInt(amount),
                         );
 
-                    validateMintPaymentConfiguration(chain.id, protocolFee, erc20PaymentAddress);
+                    const totalProtocolFee = protocolFeeForOne * BigInt(amount);
+
+                    const USDC_ADDRESS = getUsdcAddress(chain.id);
+                    if (erc20PaymentAddress !== USDC_ADDRESS && erc20PaymentAddress !== ZERO_ADDRESS) {
+                        throw new Error("Unsupported payment token. Only USDC and Native ETH are supported.");
+                    }
+
+                    const isErc20Usdc = erc20PaymentAddress.toLowerCase() === USDC_ADDRESS.toLowerCase();
+                    const isErc20Native = erc20PaymentAddress === ZERO_ADDRESS;
+
+                    let finalPrice: bigint;
+
+                    if (isErc20Usdc) {
+                        if (totalProtocolFee === 0n) {
+                            finalPrice = mintFee;
+                        } else {
+                            const poolAddress = getWETHUSDCPoolAddress(chain.id);
+                            const usdcProtocolFee = await convertEthToUsdc(publicClient, poolAddress, totalProtocolFee);
+                            const usdcProtocolFeeWithSlippage = (usdcProtocolFee * 103n) / 100n;
+                            finalPrice = mintFee + usdcProtocolFeeWithSlippage;
+                        }
+                    } else if (isErc20Native) {
+                        const poolAddress = getWETHUSDCPoolAddress(chain.id);
+                        if (totalProtocolFee === 0n) {
+                            const usdcMintFee = await convertEthToUsdc(publicClient, poolAddress, mintFee);
+                            const usdcMintFeeWithSlippage = (usdcMintFee * 103n) / 100n;
+                            finalPrice = usdcMintFeeWithSlippage;
+                        } else {
+                            const totalNativeFee = mintFee + totalProtocolFee;
+                            const usdcTotalFee = await convertEthToUsdc(publicClient, poolAddress, totalNativeFee);
+                            const usdcTotalFeeWithSlippage = (usdcTotalFee * 103n) / 100n;
+                            finalPrice = usdcTotalFeeWithSlippage;
+                        }
+                    } else {
+                        throw new Error("Invalid payment configuration");
+                    }
+
                     const commission = COMMISSION_ENABLED ? COMMISSION_AMOUNT : 0n;
-                    const price = mintFee + commission;
-                    console.log("DEBUG: Contract data fetched:", { protocolFee, erc20PaymentAddress, mintFee, commission, commissionEnabled: COMMISSION_ENABLED });
+                    const price = finalPrice + commission;
+                    console.log("DEBUG: Contract data fetched:", { totalProtocolFee, erc20PaymentAddress, mintFee, commission, commissionEnabled: COMMISSION_ENABLED, finalPrice: finalPrice.toString(), price: price.toString() });
 
                     return formatUnits(price, COMMISSION_DECIMALS);
                 },
@@ -212,7 +414,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                 category: "nfts",
                 tags: ["mint", "nft", "nfts", "erc721"],
             },
-        },        
+        },
     };
 }
 
