@@ -11,8 +11,8 @@ import { readMintContractDataWithMulticall, getUsdcAddress, ZERO_ADDRESS, getWET
 
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
-const FORWARDER_CONTRACT_ADDRESS = "0x13F1d247d175dBd1984E2F61698361B32824bcF0" as `0x${string}`; // Versión con swap y quote.
-
+const FORWARDER_CONTRACT_ADDRESS = "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" as `0x${string}`; // Versión con swap y quote.
+const SLIPPAGE_MULTIPLIER: bigint = 101n;
 
 const COMMISSION_ENABLED = (() => {
     const raw = process.env.COMMISSION_ENABLED?.trim().toLowerCase();
@@ -377,19 +377,19 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                         } else {
                             const poolAddress = getWETHUSDCPoolAddress(chain.id);
                             const usdcProtocolFee = await convertEthToUsdc(publicClient, poolAddress, totalProtocolFee);
-                            const usdcProtocolFeeWithSlippage = (usdcProtocolFee * 103n) / 100n;
+                            const usdcProtocolFeeWithSlippage = (usdcProtocolFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = mintFee + usdcProtocolFeeWithSlippage;
                         }
                     } else if (isErc20Native) {
                         const poolAddress = getWETHUSDCPoolAddress(chain.id);
                         if (totalProtocolFee === 0n) {
                             const usdcMintFee = await convertEthToUsdc(publicClient, poolAddress, mintFee);
-                            const usdcMintFeeWithSlippage = (usdcMintFee * 103n) / 100n;
+                            const usdcMintFeeWithSlippage = (usdcMintFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcMintFeeWithSlippage;
                         } else {
                             const totalNativeFee = mintFee + totalProtocolFee;
                             const usdcTotalFee = await convertEthToUsdc(publicClient, poolAddress, totalNativeFee);
-                            const usdcTotalFeeWithSlippage = (usdcTotalFee * 103n) / 100n;
+                            const usdcTotalFeeWithSlippage = (usdcTotalFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcTotalFeeWithSlippage;
                         }
                     } else {
