@@ -1,8 +1,8 @@
 allowBuilds:
   '@coinbase/x402': false
   bufferutil: false
-  keccak: true // Por optimizar el rendimiento de las funciones hash, especialmente en operaciones criptográficas.
-  sharp: true // Para optimizar el procesamiento de imágenes, lo que es crucial para aplicaciones que manejan gráficos o visuales.
+  keccak: true
+  sharp: true
   unrs-resolver: false
   utf-8-validate: false
 minimumReleaseAgeExclude:
