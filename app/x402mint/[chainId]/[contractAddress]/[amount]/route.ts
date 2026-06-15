@@ -21,7 +21,19 @@ function logDev(...args: any[]) {
 
 // const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
-const FORWARDER_CONTRACT_ADDRESS = "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" as `0x${string}`; // Versión con swap y quote.
+const FORWARDER_CONTRACT_ADDRESSES: Record<number, `0x${string}`> = {
+    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D", // BaseSepolia
+    8453: "0x5F5a6890000d932B4a8cec5b408F26339A84437C", // Base mainnet
+};
+
+function getForwarderAddress(chainId: number): `0x${string}` {
+    const address = FORWARDER_CONTRACT_ADDRESSES[chainId];
+    if (!address) {
+        throw new Error(`Forwarder contract address not configured for chainId: ${chainId}`);
+    }
+    return address;
+}
+
 const SLIPPAGE_MULTIPLIER: bigint = 101n;
 
 const COMMISSION_ENABLED = (() => {
@@ -66,6 +78,7 @@ type VerifyOnlyResponse = {
  */
 async function convertEthToUsdc(
     publicClient: ReturnType<typeof createPublicClient>,
+    chainId: number,
     poolAddress: `0x${string}`,
     ethAmount: bigint
 ): Promise<bigint> {
@@ -82,8 +95,10 @@ async function convertEthToUsdc(
         "type": "function"
     }] as const;
 
+    const forwarderAddress = getForwarderAddress(chainId);
+
     const usdcAmount = await publicClient.readContract({
-        address: FORWARDER_CONTRACT_ADDRESS,
+        address: forwarderAddress,
         abi: quoteAbi,
         functionName: "quoteUSDCForNative",
         args: [poolAddress, ethAmount],
@@ -294,9 +309,10 @@ const handler = async (
             throw new Error("Invalid payment configuration");
         }
 
+        const forwarderAddress = getForwarderAddress(chain.id);
         logDev("Before sending transaction");
         const hash = await walletClient.writeContract({
-            address: FORWARDER_CONTRACT_ADDRESS,
+            address: forwarderAddress,
             abi: forwarderAbi as any,
             functionName: functionName as any,
             args: args as any
@@ -351,6 +367,7 @@ const handler = async (
  * Fetches the mint fee dynamically from the contract
  */
 function getMintNftX402Config(actionName: string, chain: Chain, network: string, contractAddress: string, amount: string) {
+    const forwarderAddress = getForwarderAddress(chain.id);
     return {
         accepts: [
             {
@@ -386,19 +403,19 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                             finalPrice = mintFee;
                         } else {
                             const poolAddress = getWETHUSDCPoolAddress(chain.id);
-                            const usdcProtocolFee = await convertEthToUsdc(publicClient, poolAddress, totalProtocolFee);
+                            const usdcProtocolFee = await convertEthToUsdc(publicClient, chain.id, poolAddress, totalProtocolFee);
                             const usdcProtocolFeeWithSlippage = (usdcProtocolFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = mintFee + usdcProtocolFeeWithSlippage;
                         }
                     } else if (isErc20Native) {
                         const poolAddress = getWETHUSDCPoolAddress(chain.id);
                         if (totalProtocolFee === 0n) {
-                            const usdcMintFee = await convertEthToUsdc(publicClient, poolAddress, mintFee);
+                            const usdcMintFee = await convertEthToUsdc(publicClient, chain.id, poolAddress, mintFee);
                             const usdcMintFeeWithSlippage = (usdcMintFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcMintFeeWithSlippage;
                         } else {
                             const totalNativeFee = mintFee + totalProtocolFee;
-                            const usdcTotalFee = await convertEthToUsdc(publicClient, poolAddress, totalNativeFee);
+                            const usdcTotalFee = await convertEthToUsdc(publicClient, chain.id, poolAddress, totalNativeFee);
                             const usdcTotalFeeWithSlippage = (usdcTotalFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcTotalFeeWithSlippage;
                         }
@@ -413,7 +430,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                     return formatUnits(price, COMMISSION_DECIMALS);
                 },
                 network,
-                payTo: FORWARDER_CONTRACT_ADDRESS,
+                payTo: forwarderAddress,
             },
         ],
         description: actionName,
@@ -488,6 +505,24 @@ function isTestnet(chainId: string | number): boolean {
     return TESTNET_CHAIN_IDS.includes(String(chainId));
 }
 
+function validateChainConfig(chainId: number) {
+    const chain = SUPPORTED_CHAINS[String(chainId)];
+    if (!chain) {
+        throw new Error(`Chain ${chainId} is not supported. Supported chainIds: ${Object.keys(SUPPORTED_CHAINS).join(", ")}`);
+    }
+
+    const forwarder = FORWARDER_CONTRACT_ADDRESSES[chainId];
+    if (!forwarder) {
+        throw new Error(`Forwarder contract address not configured for chainId: ${chainId}`);
+    }
+
+    // Validate USDC Address
+    getUsdcAddress(chainId);
+
+    // Validate WETH/USDC Pool Address
+    getWETHUSDCPoolAddress(chainId);
+}
+
 function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
     if (!ipfsUrl) return undefined;
     if (ipfsUrl.startsWith("ipfs://")) {
@@ -507,6 +542,18 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
             {
                 error: `Unsupported chainId: ${chainId}`,
                 supportedChainIds: Object.keys(SUPPORTED_CHAINS),
+            },
+            { status: 400 }
+        );
+    }
+
+    // Validate that all chain-dependent configurations are present
+    try {
+        validateChainConfig(chain.id);
+    } catch (err: any) {
+        return NextResponse.json(
+            {
+                error: `Invalid chain configuration: ${err.message}`,
             },
             { status: 400 }
         );
