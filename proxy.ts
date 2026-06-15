@@ -5,7 +5,7 @@ import { createPaywall } from "@x402/paywall";
 import { evmPaywall } from "@x402/paywall/evm";
 
 const facilitatorClient = new HTTPFacilitatorClient({
-    url: "https://x402.org/facilitator"
+    url: process.env.FACILITATOR_URL || "https://x402.org/facilitator"
 });
 
 // Create x402 resource server

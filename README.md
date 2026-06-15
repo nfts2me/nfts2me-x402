@@ -24,7 +24,7 @@ Lo que ya está implementado:
 2. Endpoint dinámico de minteo con settlement estándar:
 	- `GET /api/mint/[chainId]/[contractAddress]/[amount]`
 3. Endpoint dinámico verify-only (sin settle automático):
-	- `GET /api/mint02/[chainId]/[contractAddress]/[amount]`
+	- `GET /x402mint/[chainId]/[contractAddress]/[amount]`
 4. Validaciones on-chain básicas:
 	- `protocolFee === 0`
 	- `erc20PaymentAddress` coincide con USDC de la red
@@ -44,7 +44,7 @@ Limitaciones y pendientes actuales:
 	- Usa `withX402`.
 	- Calcula precio dinámico leyendo `mintFee` del contrato.
 	- Ejecuta aprobación (si aplica) y `mintTo` con wallet del servidor.
-2. `app/api/mint02/.../route.ts`
+2. `app/x402mint/.../route.ts`
 	- Usa `withX402VerifyOnly`.
 	- Verifica pago y devuelve autorización EIP-3009 para settle atómico on-chain.
 3. `lib/supabase.ts`
@@ -66,18 +66,19 @@ Limitaciones y pendientes actuales:
 
 Variables esperadas por el proyecto (segun código actual):
 
-1. `WALLET_ADDRESS`
-2. `EVM_ADDRESS`
-3. `PRIVATE_KEY`
-4. `APP_NAME`
-5. `APP_LOGO`
-6. `NEXT_PUBLIC_SUPABASE_URL`
-7. `SUPABASE_SERVICE_KEY`
-
-Notas:
-
-1. `lib/supabase.ts` lanza error al iniciar si faltan `NEXT_PUBLIC_SUPABASE_URL` o `SUPABASE_SERVICE_KEY`.
-2. No se deben commitear secretos reales en el repositorio.
+ 1. `WALLET_ADDRESS`
+ 2. `EVM_ADDRESS`
+ 3. `PRIVATE_KEY`
+ 4. `APP_NAME`
+ 5. `APP_LOGO`
+ 6. `NEXT_PUBLIC_SUPABASE_URL`
+ 7. `SUPABASE_SERVICE_KEY`
+ 8. `FACILITATOR_URL` (Opcional, URL de producción del facilitador x402)
+ 
+ Notas:
+ 
+ 1. `lib/supabase.ts` lanza error al iniciar si faltan `NEXT_PUBLIC_SUPABASE_URL` o `SUPABASE_SERVICE_KEY`.
+ 2. No se deben commitear secretos reales en el repositorio.
 
 ## Desarrollo local
 
@@ -104,14 +105,14 @@ pnpm run lint
 1. `GET /api/mint/[chainId]/[contractAddress]/[amount]`
 	- Verifica y liquida pago x402 (flujo estándar).
 	- Realiza mint vía `mintTo`.
-2. `GET /api/mint02/[chainId]/[contractAddress]/[amount]`
+2. `GET /x402mint/[chainId]/[contractAddress]/[amount]`
 	- Verifica pago x402 sin settle.
 	- Devuelve autorización EIP-3009 para settle atómico on-chain.
 
 ### Endpoints ejemplo DEV
 
 - http://localhost:3000/api/mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
-- http://localhost:3000/api/mint02/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
+- http://localhost:3000/x402mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
 
 ## Redes soportadas (implementación actual)
 
@@ -132,7 +133,7 @@ La detección de testnet para el paywall se basa en:
 2. Revisar seguridad de secretos y rotación de claves.
 3. Eliminar logs sensibles/de depuración.
 4. Definir estrategia final entre `withX402` y `withX402VerifyOnly` por caso de uso.
-5. Añadir tests de integración para rutas `/api/mint` y `/api/mint02`.
+5. Añadir tests de integración para rutas `/api/mint` y `/x402mint`.
 
 ## Política de mantenimiento del README
 

@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, createWalletClient, http, formatUnits, Chain } from "viem";
+import { createPublicClient, createWalletClient, http, formatUnits, Chain, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
-import { server } from "../../../../../../proxy";
-import { getMintingPageLogoAndName } from "../../../../../../lib/supabase";
-import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../../lib/withX402VerifyOnly";
+import { server } from "../../../../../proxy";
+import { getMintingPageLogoAndName } from "../../../../../lib/supabase";
+import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
-import { readMintContractDataWithMulticall, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../../lib/mintContractReads";
+import { readMintContractDataWithMulticall, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
+
+const isDev = process.env.NODE_ENV === "development";
+
+function logDev(...args: any[]) {
+    if (isDev) {
+        console.log(...args);
+    }
+}
 
 const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
@@ -112,11 +120,11 @@ const handler = async (
         }
 
         // Log the authorization data for debugging
-        console.log("VERIFY-ONLY HANDLER: Payment verified!");
-        console.log("Authorization:", JSON.stringify(ctx.paymentAuth, null, 2));
-        console.log("From:", ctx.paymentAuth.authorization.from);
-        console.log("To:", ctx.paymentAuth.authorization.to);
-        console.log("Value:", ctx.paymentAuth.authorization.value);
+        logDev("VERIFY-ONLY HANDLER: Payment verified!");
+        logDev("Authorization:", JSON.stringify(ctx.paymentAuth, null, 2));
+        logDev("From:", ctx.paymentAuth.authorization.from);
+        logDev("To:", ctx.paymentAuth.authorization.to);
+        logDev("Value:", ctx.paymentAuth.authorization.value);
 
         const account = privateKeyToAccount(PRIVATE_KEY);
         const walletClient = createWalletClient({
@@ -213,7 +221,7 @@ const handler = async (
 
         if (isErc20Usdc) {
             if (totalProtocolFee === 0n) {
-                console.log("Case 1: USDC, no protocol fee");
+                logDev("Case 1: USDC, no protocol fee");
                 // Case 1: USDC, no protocol fee
                 functionName = 'mintWithAuthorization';
                 args = [
@@ -231,7 +239,7 @@ const handler = async (
                     amount
                 ];
             } else {
-                console.log("Case 2: USDC, with protocol fee (native ETH)");
+                logDev("Case 2: USDC, with protocol fee (native ETH)");
                 // Case 2: USDC, with protocol fee (native ETH)
                 const poolAddress = getWETHUSDCPoolAddress(chain.id);
                 functionName = 'mintWithAuthorizationUSDCWithNativeProtocolFee';
@@ -255,9 +263,9 @@ const handler = async (
             }
         } else if (isErc20Native) {
             if (totalProtocolFee === 0n) {
-                console.log("Case 3: Native ETH, no protocol fee");
+                logDev("Case 3: Native ETH, no protocol fee");
             } else {
-                console.log("Case 4: Native ETH, with protocol fee (native ETH)");
+                logDev("Case 4: Native ETH, with protocol fee (native ETH)");
             }
             // Case 3 & 4: Native ETH
             const poolAddress = getWETHUSDCPoolAddress(chain.id);
@@ -279,12 +287,12 @@ const handler = async (
                 to,
                 amount
             ];
-            console.log("DEBUG: Args: ", args);
+            logDev("DEBUG: Args: ", args);
         } else {
             throw new Error("Invalid payment configuration");
         }
 
-        console.log("Before sending transaction");
+        logDev("Before sending transaction");
         const hash = await walletClient.writeContract({
             address: FORWARDER_CONTRACT_ADDRESS,
             abi: forwarderAbi as any,
@@ -292,7 +300,7 @@ const handler = async (
             args: args as any
         });
 
-        console.log("Minting transaction sent. Hash:", hash);
+        logDev("Minting transaction sent. Hash:", hash);
 
         // Comprobar que ha ido bien
         const txReceipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -300,7 +308,7 @@ const handler = async (
             console.error("Transaction failed:", txReceipt);
             throw new Error("Minting transaction failed");
         }
-        console.log("Minting transaction successful! Hash:", hash);
+        logDev("Minting transaction successful! Hash:", hash);
         const etherscanTxUrl = `${chain.blockExplorers?.default.url}/tx/${hash}`;
 
         // Return the authorization data for on-chain execution
@@ -398,7 +406,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
 
                     const commission = COMMISSION_ENABLED ? COMMISSION_AMOUNT : 0n;
                     const price = finalPrice + commission;
-                    console.log("DEBUG: Contract data fetched:", { totalProtocolFee, erc20PaymentAddress, mintFee, commission, commissionEnabled: COMMISSION_ENABLED, finalPrice: finalPrice.toString(), price: price.toString() });
+                    logDev("DEBUG: Contract data fetched:", { totalProtocolFee, erc20PaymentAddress, mintFee, commission, commissionEnabled: COMMISSION_ENABLED, finalPrice: finalPrice.toString(), price: price.toString() });
 
                     return formatUnits(price, COMMISSION_DECIMALS);
                 },
@@ -412,7 +420,56 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
             bazaar: {
                 discoverable: true,
                 category: "nfts",
-                tags: ["mint", "nft", "nfts", "erc721"],
+                tags: ["mint", "nft", "nfts", "erc721", "nfts2me"],
+                info: {
+                    input: {
+                        type: "http",
+                        method: "GET",
+                        pathParams: {
+                            chainId: chain.id.toString(),
+                            contractAddress: contractAddress,
+                            amount: amount
+                        },
+                        routeTemplate: "/x402mint/:chainId/:contractAddress/:amount"
+                    },
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            chainId: {
+                                type: "string",
+                                description: "EVM Chain ID (8453 for Base Mainnet, 84532 for Base Sepolia)"
+                            },
+                            contractAddress: {
+                                type: "string",
+                                description: "The EVM address of the NFT collection contract"
+                            },
+                            amount: {
+                                type: "string",
+                                description: "The number of NFTs to mint"
+                            }
+                        },
+                        required: ["chainId", "contractAddress", "amount"]
+                    },
+                    output: {
+                        type: "json",
+                        example: {
+                            success: true,
+                            message: "Payment verified and minted on-chain!",
+                            mintTxHash: "0x...",
+                            etherscanTxUrl: "https://..."
+                        },
+                        schema: {
+                            type: "object",
+                            properties: {
+                                success: { type: "boolean" },
+                                message: { type: "string" },
+                                mintTxHash: { type: "string" },
+                                etherscanTxUrl: { type: "string" }
+                            },
+                            required: ["success", "message", "mintTxHash"]
+                        }
+                    }
+                }
             },
         },
     };
@@ -441,9 +498,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     const params = await props.params;
     const { chainId, contractAddress, amount } = params;
 
-    // Fetch minting page info from Supabase
-    const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
-
+    // 1. Sanitize and validate chainId
     const chain = SUPPORTED_CHAINS[chainId];
     if (!chain) {
         return NextResponse.json(
@@ -454,6 +509,26 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
             { status: 400 }
         );
     }
+
+    // 2. Sanitize and validate contractAddress using Viem's isAddress
+    if (!isAddress(contractAddress)) {
+        return NextResponse.json(
+            { error: `Invalid contract address format: ${contractAddress}` },
+            { status: 400 }
+        );
+    }
+
+    // 3. Sanitize and validate amount
+    const parsedAmount = parseInt(amount, 10);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+        return NextResponse.json(
+            { error: `Invalid mint amount: ${amount}. Must be a positive integer.` },
+            { status: 400 }
+        );
+    }
+
+    // Fetch minting page info from Supabase
+    const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
 
     const testnet = isTestnet(chain.id);
 
@@ -476,7 +551,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount),
         getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount) as any,
         server,
-        "/api/mint02/:chainId/:contractAddress/:amount",
+        "/x402mint/:chainId/:contractAddress/:amount",
         undefined,
         dynamicPaywall
     );

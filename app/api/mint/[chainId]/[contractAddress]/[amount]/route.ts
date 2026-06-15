@@ -113,9 +113,9 @@ const handler = async (
         // Current business rule: minting requires USDC as payment token.
         validateMintPaymentConfiguration(chain.id, protocolFee, erc20PaymentAddress);
 
-        
+
         // Para poder enviar en el mismo bloque el approve y el mint, tengo que forzar el nonce y el gas en la llamada del approve, y no esperar
-        let nonce = await publicClient.getTransactionCount({ 
+        let nonce = await publicClient.getTransactionCount({
             address: account.address,
         });
 
