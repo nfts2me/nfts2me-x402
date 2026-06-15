@@ -33,15 +33,5 @@
     "tailwindcss": "^4",
     "typescript": "^6"
   },
-  "packageManager": "pnpm@11.5.0",
-  "pnpm": {
-    "approvedBuilds": [
-      "keccak",
-      "sharp"
-    ],
-    "onlyBuiltDependencies": [
-      "keccak",
-      "sharp"
-    ]
-  }
+  "packageManager": "pnpm@11.5.0"
 }
