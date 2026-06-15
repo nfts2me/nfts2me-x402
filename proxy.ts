@@ -14,12 +14,12 @@ export const server = new x402ResourceServer(facilitatorClient);
 // Register schemes
 registerExactEvmScheme(server);
 
-export const evmAddress = process.env.WALLET_ADDRESS as `0x${string}`;
+export const payToEvmAddress = process.env.PAY_TO_EVM_ADDRESS as `0x${string}`;
 // Build paywall
 export const paywall = createPaywall()
     .withNetwork(evmPaywall)
     .withConfig({
-        appName: process.env.APP_NAME || "Next x402 Demo",
+        appName: process.env.APP_NAME || "NFTs2Me x402 Service",
         appLogo: process.env.APP_LOGO || "/x402-icon-blue.png",
         testnet: true,
     })
@@ -33,7 +33,7 @@ export const proxy = paymentProxy(
                     scheme: "exact",
                     price: "$0.01",
                     network: "eip155:84532",
-                    payTo: evmAddress,
+                    payTo: payToEvmAddress,
                 },
             ],
             description: "Premium content access",

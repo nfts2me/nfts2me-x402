@@ -17,7 +17,7 @@ function logDev(...args: any[]) {
     }
 }
 
-const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
+// const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const FORWARDER_CONTRACT_ADDRESS = "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" as `0x${string}`; // Versión con swap y quote.
 const SLIPPAGE_MULTIPLIER: bigint = 101n;
@@ -532,7 +532,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     const testnet = isTestnet(chain.id);
 
-    const appName = mintingPageInfo?.name || process.env.APP_NAME || "Next x402 Demo";
+    const appName = mintingPageInfo?.name || process.env.APP_NAME || "NFTs2Me x402 Service";
     const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
     const actionName = `Mint ${amount} NFT${amount === "1" ? "" : "s"} from ${mintingPageInfo?.name}`;
 

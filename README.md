@@ -67,7 +67,7 @@ Limitaciones y pendientes actuales:
 Variables esperadas por el proyecto (segun código actual):
 
  1. `WALLET_ADDRESS`
- 2. `EVM_ADDRESS`
+ 2. `PAY_TO_EVM_ADDRESS`
  3. `PRIVATE_KEY`
  4. `APP_NAME`
  5. `APP_LOGO`
