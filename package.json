@@ -38,6 +38,10 @@
     "approvedBuilds": [
       "keccak",
       "sharp"
+    ],
+    "onlyBuiltDependencies": [
+      "keccak",
+      "sharp"
     ]
-  }  
+  }
 }
