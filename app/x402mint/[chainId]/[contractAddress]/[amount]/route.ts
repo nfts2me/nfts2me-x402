@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, createWalletClient, http, formatUnits, Chain, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
-import { server } from "../../../../../proxy";
+import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
+import { registerExactEvmScheme } from "@x402/evm/exact/server";
 import { getMintingPageLogoAndName } from "../../../../../lib/supabase";
 import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
+import { facilitator } from "@coinbase/x402";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -532,6 +534,29 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     const testnet = isTestnet(chain.id);
 
+    // Seleccionar dinámicamente la URL del facilitador según la red (testnet o mainnet)
+    // Aquí redes soportadas y más información: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
+    const facilitatorUrl = testnet
+        ? (process.env.TESTNET_FACILITATOR_URL || "https://x402.org/facilitator")
+        : (process.env.FACILITATOR_URL || "https://facilitator.payai.network");
+
+    // Este usa en mainnet el facilitator de payai.
+    const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl })
+
+    // Si quiero usar el de Coinbase.
+    // Para eso tengo que hacer lo siguiente
+    // - Añadir el facilitator de coinbase (https://docs.cdp.coinbase.com/x402/quickstart-for-sellers#running-on-mainnet)
+    // - Darnos de alta en cdp.coinbase.com 
+    // - Añadir estas dos variables:
+    //   CDP_API_KEY_ID=your-api-key-id
+    //   CDP_API_KEY_SECRET=your-api-key-secret
+    // const facilitatorClient = testnet
+    //     ? new HTTPFacilitatorClient({ url: facilitatorUrl })
+    //     : new HTTPFacilitatorClient(facilitator);
+
+    const dynamicServer = new x402ResourceServer(facilitatorClient);
+    registerExactEvmScheme(dynamicServer);
+
     const appName = mintingPageInfo?.name || process.env.APP_NAME || "NFTs2Me x402 Service";
     const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
     const actionName = `Mint ${amount} NFT${amount === "1" ? "" : "s"} from ${mintingPageInfo?.name}`;
@@ -550,7 +575,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     const protectedHandler = withX402VerifyOnly(
         (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount),
         getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount) as any,
-        server,
+        dynamicServer,
         "/x402mint/:chainId/:contractAddress/:amount",
         undefined,
         dynamicPaywall
