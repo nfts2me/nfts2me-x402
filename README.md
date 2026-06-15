@@ -155,4 +155,3 @@ No debe considerarse todavía una integración final de producción, pero sí un
 Todo el código que genere texto que se pueda leer desde el exterior (logs, respuestas API, etc.) debe estar en inglés, para mantener consistencia y facilitar futuras integraciones internacionales.
 
 Los comentarios y cosas internas se deben hacer en español.
-
