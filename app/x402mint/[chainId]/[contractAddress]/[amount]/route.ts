@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createPublicClient, createWalletClient, http, formatUnits, Chain, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { base, baseSepolia } from "viem/chains";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
 import { getMintingPageLogoAndName } from "../../../../../lib/supabase";
 import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
-import { readMintContractDataWithMulticall, getUsdcAddress, ZERO_ADDRESS, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
+import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
 import { facilitator } from "@coinbase/x402";
+import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet, ZERO_ADDRESS } from "../../../../../lib/networks";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -21,11 +21,6 @@ function logDev(...args: any[]) {
 
 // const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
-const FORWARDER_CONTRACT_ADDRESSES: Record<number, `0x${string}`> = {
-    137: "0x52f17BEdBb1BC243000524a4622F5D621A75c713", // Polygon Mainnet
-    8453: "0x5F5a6890000d932B4a8cec5b408F26339A84437C", // Base mainnet
-    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" // BaseSepolia
-};
 
 function getForwarderAddress(chainId: number): `0x${string}` {
     const address = FORWARDER_CONTRACT_ADDRESSES[chainId];
@@ -495,16 +490,8 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
     };
 }
 
-const TESTNET_CHAIN_IDS = ["84532", "11155111", "80002"];
 
-const SUPPORTED_CHAINS: Record<string, Chain> = {
-    "8453": base,
-    "84532": baseSepolia,
-};
 
-function isTestnet(chainId: string | number): boolean {
-    return TESTNET_CHAIN_IDS.includes(String(chainId));
-}
 
 function validateChainConfig(chainId: number) {
     const chain = SUPPORTED_CHAINS[String(chainId)];

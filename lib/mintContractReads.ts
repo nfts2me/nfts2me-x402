@@ -1,40 +1,13 @@
 import { createPublicClient } from "viem";
+import {
+    USDC_ADDRESSES,
+    WETH_USDC_POOLS,
+    ZERO_ADDRESS,
+    MULTICALL3_ADDRESSES,
+} from "./networks";
 
-export const USDC_ADDRESSES: Record<number, `0x${string}`> = {
-    8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Base
-    84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", // Base Sepolia
-};
+export { ZERO_ADDRESS };
 
-// Coger las pools de aquí. https://app.uniswap.org/explore/pools/base
-// Si no está, ir por ejemplo aqúi: https://sepolia.basescan.org/address/0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24#readContract
-// Go to the Uniswap V3 Factory Contract on Base
-// - Sepolia Basescan (Factory Address: 0x4752ba5dbc23f44d87826276bf6fd6b1c372ad24).
-// - Click on the Read Contract tab.
-// - Locate the getPool function.
-// - Input the following parameters into the fields:
-//   * tokenA: 0x4200000000000000000000000000000000000006 (WETH)
-//   * tokenB: 0x036cbd53842c5426634e7929541ec2318f3dcf7e (USDC)
-//   *   fee: 3000 (This represents the standard 0.3% fee tier. 
-//   *   fee: Use 500 for 0.05% or
-//   *   fee: 10000 for 1%).
-
-// Base Sepolia, la que más movimiento parece tener:
-// https://sepolia.basescan.org/address/0x46880b404CD35c165EDdefF7421019F8dD25F4Ad#tokentxns
-
-// Base, listado: https://app.uniswap.org/explore/pools/base
-// La más barata: https://app.uniswap.org/explore/pools/base/0xd0b53D9277642d899DF5C87A3966A349A798F224
-export const WETH_USDC_POOLS: Record<number, `0x${string}`> = {
-    8453: "0xd0b53D9277642d899DF5C87A3966A349A798F224", // Base
-    84532: "0x46880b404CD35c165EDdefF7421019F8dD25F4Ad", // Base Sepolia (same address as Base for testing)
-};
-
-
-export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
-
-export const MULTICALL3_ADDRESSES: Record<number, readonly `0x${string}`[]> = {
-    8453: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Base
-    84532: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Base Sepolia
-};
 
 export const ABI_CHECKS = [
     { inputs: [], name: "protocolFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
