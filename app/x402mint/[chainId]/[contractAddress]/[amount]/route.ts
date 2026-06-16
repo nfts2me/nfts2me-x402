@@ -22,8 +22,9 @@ function logDev(...args: any[]) {
 // const EVM_ADDRESS = process.env.EVM_ADDRESS as `0x${string}`;
 const PRIVATE_KEY = process.env.PRIVATE_KEY as `0x${string}`;
 const FORWARDER_CONTRACT_ADDRESSES: Record<number, `0x${string}`> = {
-    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D", // BaseSepolia
+    137: "0x52f17BEdBb1BC243000524a4622F5D621A75c713", // Polygon Mainnet
     8453: "0x5F5a6890000d932B4a8cec5b408F26339A84437C", // Base mainnet
+    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" // BaseSepolia
 };
 
 function getForwarderAddress(chainId: number): `0x${string}` {
