@@ -4,6 +4,7 @@ import {
     WETH_USDC_POOLS,
     ZERO_ADDRESS,
     MULTICALL3_ADDRESSES,
+    FORWARDER_CONTRACT_ADDRESSES,
 } from "./networks";
 
 export { ZERO_ADDRESS };
@@ -73,8 +74,24 @@ export async function readMintContractDataWithMulticall(
     amount: bigint,
 ) {
     const multicallAddress = getMulticallAddress(chainId);
+    const poolAddress = getWETHUSDCPoolAddress(chainId);
+    const forwarderAddress = FORWARDER_CONTRACT_ADDRESSES[chainId];
+    if (!forwarderAddress) {
+        throw new Error(`Forwarder contract address not configured for chainId: ${chainId}`);
+    }
 
-    const [protocolFee, erc20PaymentAddress, mintFee] = await publicClient.multicall({
+    const quoteAbi = [{
+        "inputs": [
+            { "internalType": "address", "name": "pool", "type": "address" },
+            { "internalType": "uint256", "name": "nativeAmount", "type": "uint256" }
+        ],
+        "name": "quoteUSDCForNative",
+        "outputs": [{ "internalType": "uint256", "name": "usdcAmount", "type": "uint256" }],
+        "stateMutability": "view",
+        "type": "function"
+    }] as const;
+
+    const [protocolFee, erc20PaymentAddress, mintFee, quoteForOneEth] = await publicClient.multicall({
         multicallAddress,
         allowFailure: false,
         contracts: [
@@ -94,10 +111,16 @@ export async function readMintContractDataWithMulticall(
                 functionName: "mintFee",
                 args: [amount],
             },
+            {
+                address: forwarderAddress,
+                abi: quoteAbi,
+                functionName: "quoteUSDCForNative",
+                args: [poolAddress, 10n ** 18n], // Quote for 1 ETH (10^18 wei)
+            }
         ],
     });
 
-    return { protocolFee, erc20PaymentAddress, mintFee };
+    return { protocolFee, erc20PaymentAddress, mintFee, quoteForOneEth };
 }
 
 // El allowance es optimistic en el sentido de que suponemos que siempre va a ser USDC. Si no, abajo se soluciona.

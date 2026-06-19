@@ -37,7 +37,7 @@ const COMMISSION_ENABLED = (() => {
     if (raw === undefined) return true; // enabled by default
     return raw === "true" || raw === "1" || raw === "yes";
 })();
-const COMMISSION_AMOUNT = BigInt(process.env.COMMISSION_AMOUNT ?? "20000");
+const COMMISSION_AMOUNT = BigInt(process.env.COMMISSION_AMOUNT ?? "10000");
 const COMMISSION_DECIMALS = Number(process.env.COMMISSION_DECIMALS ?? "6");
 
 /**
@@ -72,37 +72,6 @@ type VerifyOnlyResponse = {
  * 2. Executes the minting operation
  * 3. Reverts everything if either step fails
  */
-async function convertEthToUsdc(
-    publicClient: ReturnType<typeof createPublicClient>,
-    chainId: number,
-    poolAddress: `0x${string}`,
-    ethAmount: bigint
-): Promise<bigint> {
-    if (ethAmount === 0n) return 0n;
-
-    const quoteAbi = [{
-        "inputs": [
-            { "internalType": "address", "name": "pool", "type": "address" },
-            { "internalType": "uint256", "name": "nativeAmount", "type": "uint256" }
-        ],
-        "name": "quoteUSDCForNative",
-        "outputs": [{ "internalType": "uint256", "name": "usdcAmount", "type": "uint256" }],
-        "stateMutability": "view",
-        "type": "function"
-    }] as const;
-
-    const forwarderAddress = getForwarderAddress(chainId);
-
-    const usdcAmount = await publicClient.readContract({
-        address: forwarderAddress,
-        abi: quoteAbi,
-        functionName: "quoteUSDCForNative",
-        args: [poolAddress, ethAmount],
-    });
-
-    return usdcAmount;
-}
-
 const handler = async (
     ctx: VerifyOnlyContext,
     chain: Chain,
@@ -374,7 +343,7 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                         transport: http()
                     });
 
-                    const { protocolFee: protocolFeeForOne, erc20PaymentAddress, mintFee } =
+                    const { protocolFee: protocolFeeForOne, erc20PaymentAddress, mintFee, quoteForOneEth } =
                         await readMintContractDataWithMulticall(
                             publicClient,
                             chain.id,
@@ -398,20 +367,18 @@ function getMintNftX402Config(actionName: string, chain: Chain, network: string,
                         if (totalProtocolFee === 0n) {
                             finalPrice = mintFee;
                         } else {
-                            const poolAddress = getWETHUSDCPoolAddress(chain.id);
-                            const usdcProtocolFee = await convertEthToUsdc(publicClient, chain.id, poolAddress, totalProtocolFee);
+                            const usdcProtocolFee = (totalProtocolFee * quoteForOneEth) / 10n ** 18n;
                             const usdcProtocolFeeWithSlippage = (usdcProtocolFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = mintFee + usdcProtocolFeeWithSlippage;
                         }
                     } else if (isErc20Native) {
-                        const poolAddress = getWETHUSDCPoolAddress(chain.id);
                         if (totalProtocolFee === 0n) {
-                            const usdcMintFee = await convertEthToUsdc(publicClient, chain.id, poolAddress, mintFee);
+                            const usdcMintFee = (mintFee * quoteForOneEth) / 10n ** 18n;
                             const usdcMintFeeWithSlippage = (usdcMintFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcMintFeeWithSlippage;
                         } else {
                             const totalNativeFee = mintFee + totalProtocolFee;
-                            const usdcTotalFee = await convertEthToUsdc(publicClient, chain.id, poolAddress, totalNativeFee);
+                            const usdcTotalFee = (totalNativeFee * quoteForOneEth) / 10n ** 18n;
                             const usdcTotalFeeWithSlippage = (usdcTotalFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcTotalFeeWithSlippage;
                         }
