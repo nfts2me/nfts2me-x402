@@ -73,6 +73,7 @@ export async function readMintContractDataWithMulticall(
     contractAddress: `0x${string}`,
     amount: bigint,
 ) {
+    console.log("Llamada a readMintContractDataWithMulticall con valores: ", { chainId, contractAddress, amount: amount.toString() });
     const multicallAddress = getMulticallAddress(chainId);
     const poolAddress = getWETHUSDCPoolAddress(chainId);
     const forwarderAddress = FORWARDER_CONTRACT_ADDRESSES[chainId];

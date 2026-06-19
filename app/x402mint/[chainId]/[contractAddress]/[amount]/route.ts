@@ -42,8 +42,7 @@ const COMMISSION_DECIMALS = Number(process.env.COMMISSION_DECIMALS ?? "6");
 
 /**
  * Verify-only mint handler response type
- * 
- * Returns the EIP-3009 authorization data for on-chain settlement.
+ * * Returns the EIP-3009 authorization data for on-chain settlement.
  * The actual minting will be done atomically on-chain using transferWithAuthorization.
  */
 type VerifyOnlyResponse = {
@@ -66,8 +65,7 @@ type VerifyOnlyResponse = {
 
 /**
  * Handler that receives verified payment authorization but does NOT settle.
- * 
- * This is meant to be used with a smart contract that atomically:
+ * * This is meant to be used with a smart contract that atomically:
  * 1. Calls USDC.transferWithAuthorization() with the provided authorization
  * 2. Executes the minting operation
  * 3. Reverts everything if either step fails
@@ -76,7 +74,8 @@ const handler = async (
     ctx: VerifyOnlyContext,
     chain: Chain,
     contractAddress: string,
-    amountStr: string
+    amountStr: string,
+    contractData: { protocolFee: bigint; erc20PaymentAddress: `0x${string}`; mintFee: bigint; quoteForOneEth: bigint }
 ): Promise<NextResponse<VerifyOnlyResponse>> => {
     try {
         const amount = BigInt(amountStr || "1");
@@ -87,13 +86,7 @@ const handler = async (
         });
 
         // Fetch contract data for validation via a single multicall.
-        const { protocolFee: protocolFeeForOne, erc20PaymentAddress: contractPaymentAddress, mintFee } =
-            await readMintContractDataWithMulticall(
-                publicClient,
-                chain.id,
-                contractAddress as `0x${string}`,
-                amount,
-            );
+        const { protocolFee: protocolFeeForOne, erc20PaymentAddress: contractPaymentAddress, mintFee } = contractData;
         const totalProtocolFee = protocolFeeForOne * amount;
 
         const USDC_ADDRESS = getUsdcAddress(chain.id);
@@ -331,25 +324,21 @@ const handler = async (
  * x402 route configuration
  * Fetches the mint fee dynamically from the contract
  */
-function getMintNftX402Config(actionName: string, chain: Chain, network: string, contractAddress: string, amount: string) {
+function getMintNftX402Config(
+    actionName: string, 
+    chain: Chain, 
+    network: string, 
+    contractAddress: string, 
+    amount: string,
+    contractData: { protocolFee: bigint; erc20PaymentAddress: `0x${string}`; mintFee: bigint; quoteForOneEth: bigint }
+) {
     const forwarderAddress = getForwarderAddress(chain.id);
     return {
         accepts: [
             {
                 scheme: "exact",
                 price: async () => {
-                    const publicClient = createPublicClient({
-                        chain,
-                        transport: http()
-                    });
-
-                    const { protocolFee: protocolFeeForOne, erc20PaymentAddress, mintFee, quoteForOneEth } =
-                        await readMintContractDataWithMulticall(
-                            publicClient,
-                            chain.id,
-                            contractAddress as `0x${string}`,
-                            BigInt(amount),
-                        );
+                    const { protocolFee: protocolFeeForOne, erc20PaymentAddress, mintFee, quoteForOneEth } = contractData;
 
                     const totalProtocolFee = protocolFeeForOne * BigInt(amount);
 
@@ -487,6 +476,7 @@ function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
 }
 
 export async function GET(req: NextRequest, props: { params: Promise<{ chainId: string, contractAddress: string, amount: string }> }) {
+    console.log("Se llama al GET ");
     const params = await props.params;
     const { chainId, contractAddress, amount } = params;
 
@@ -531,6 +521,20 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         );
     }
 
+    // Creamos el publicClient aquí para usarlo en la precarga de datos
+    const publicClient = createPublicClient({
+        chain,
+        transport: http()
+    });
+
+    // Precarga de datos del contrato para evitar llamadas duplicadas al RPC
+    const contractData = await readMintContractDataWithMulticall(
+        publicClient,
+        chain.id,
+        contractAddress as `0x${string}`,
+        BigInt(amount),
+    );
+
     // Fetch minting page info from Supabase
     const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
 
@@ -563,6 +567,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
     const actionName = `Mint ${amount} NFT${amount === "1" ? "" : "s"} from ${mintingPageInfo?.name}`;
 
+    console.log("se crea el paywall");
     const dynamicPaywall = createPaywall()
         .withNetwork(evmPaywall)
         .withConfig({
@@ -574,9 +579,10 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     // Use withX402VerifyOnly instead of withX402
     // This verifies payment but does NOT settle - we handle settlement on-chain
+    console.log("se crea el protectedHandler llamando a withX402VerifyOnly");
     const protectedHandler = withX402VerifyOnly(
-        (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount),
-        getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount) as any,
+        (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount, contractData),
+        getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount, contractData) as any,
         dynamicServer,
         "/x402mint/:chainId/:contractAddress/:amount",
         undefined,
