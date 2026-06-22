@@ -99,3 +99,8 @@
 //         </div>
 //     );
 // }
+
+// Stub export so this backup file still type-checks and builds.
+export default function MintPage() {
+    return null;
+}

@@ -292,3 +292,10 @@
 
 //     return protectedHandler(req);
 // }
+
+import { NextResponse } from "next/server";
+
+// Stub export so this backup file still type-checks and builds.
+export function GET() {
+    return NextResponse.json({ message: "This route is disabled." }, { status: 404 });
+}
