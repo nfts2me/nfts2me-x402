@@ -10,6 +10,7 @@ import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
 import { facilitator } from "@coinbase/x402";
 import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet, ZERO_ADDRESS } from "../../../../../lib/networks";
+import { cacheLife } from "next/cache";
 
 const isDev = process.env.NODE_ENV === "development";
 
@@ -31,6 +32,34 @@ function getForwarderAddress(chainId: number): `0x${string}` {
 }
 
 const SLIPPAGE_MULTIPLIER: bigint = 101n;
+
+async function getCachedMintContractData(
+    chainId: number,
+    contractAddress: `0x${string}`,
+    amount: bigint,
+) {
+    'use cache';
+    cacheLife({ revalidate: 60, expire: 120 });
+
+    const chain = SUPPORTED_CHAINS[String(chainId)];
+    if (!chain) {
+        throw new Error(`Unsupported chainId for cached contract data: ${chainId}`);
+    }
+
+    const publicClient = createPublicClient({
+        chain,
+        transport: http(),
+    });
+
+    const contractData = await readMintContractDataWithMulticall(publicClient, chainId, contractAddress, amount);
+
+    return {
+        protocolFee: contractData.protocolFee.toString(),
+        erc20PaymentAddress: contractData.erc20PaymentAddress,
+        mintFee: contractData.mintFee.toString(),
+        quoteForOneEth: contractData.quoteForOneEth.toString(),
+    };
+}
 
 const COMMISSION_ENABLED = (() => {
     const raw = process.env.COMMISSION_ENABLED?.trim().toLowerCase();
@@ -521,19 +550,19 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         );
     }
 
-    // Creamos el publicClient aquí para usarlo en la precarga de datos
-    const publicClient = createPublicClient({
-        chain,
-        transport: http()
-    });
-
     // Precarga de datos del contrato para evitar llamadas duplicadas al RPC
-    const contractData = await readMintContractDataWithMulticall(
-        publicClient,
+    const cachedContractData = await getCachedMintContractData(
         chain.id,
         contractAddress as `0x${string}`,
         BigInt(amount),
     );
+
+    const contractData = {
+        protocolFee: BigInt(cachedContractData.protocolFee),
+        erc20PaymentAddress: cachedContractData.erc20PaymentAddress,
+        mintFee: BigInt(cachedContractData.mintFee),
+        quoteForOneEth: BigInt(cachedContractData.quoteForOneEth),
+    } as const;
 
     // Fetch minting page info from Supabase
     const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
