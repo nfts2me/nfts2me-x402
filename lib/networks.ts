@@ -47,6 +47,17 @@ export const WETH_USDC_POOLS: Record<number, `0x${string}`> = {
 
 export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
+// URLs alternativas de RPC por cadena (añadir manualmente según necesidad).
+// El transporte fallback usa el RPC por defecto de viem como primario y estas como respaldo.
+export const RPC_URLS: Record<number, string[]> = {
+    137: [],
+    8453: ["https://gateway.tenderly.co/public/base"],
+    84532: [
+        "https://base-sepolia-rpc.publicnode.com",
+        "https://base-sepolia.gateway.tenderly.co",
+    ],
+};
+
 export const MULTICALL3_ADDRESSES: Record<number, readonly `0x${string}`[]> = {
     137: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Polygon Mainnet
     8453: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Base mainnet

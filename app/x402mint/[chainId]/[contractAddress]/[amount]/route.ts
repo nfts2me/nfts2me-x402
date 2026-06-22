@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, createWalletClient, http, formatUnits, Chain, isAddress } from "viem";
+import { createPublicClient, createWalletClient, formatUnits, Chain, isAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
@@ -10,6 +10,7 @@ import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
 import { facilitator } from "@coinbase/x402";
 import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet, ZERO_ADDRESS } from "../../../../../lib/networks";
+import { getRpcTransport, extractOnchainErrorMessage } from "../../../../../lib/rpc";
 import { cacheLife } from "next/cache";
 
 const isDev = process.env.NODE_ENV === "development";
@@ -48,7 +49,7 @@ async function getCachedMintContractData(
 
     const publicClient = createPublicClient({
         chain,
-        transport: http(),
+        transport: getRpcTransport(chainId),
     });
 
     const contractData = await readMintContractDataWithMulticall(publicClient, chainId, contractAddress, amount);
@@ -77,19 +78,20 @@ const COMMISSION_DECIMALS = Number(process.env.COMMISSION_DECIMALS ?? "6");
 type VerifyOnlyResponse = {
     success: boolean;
     message: string;
-    authorization: PaymentAuthorization;
-    // Additional context for on-chain execution
+    authorization?: PaymentAuthorization;
     mintParams: {
         chainId: string;
         contractAddress: string;
         amount: string;
-        mintFee: string;
-        protocolFee: string;
-        commissionEnabled: boolean;
-        commissionAmount: string;
-        commissionDecimals: number;
         usdcAddress: string;
+        mintFee?: string;
+        protocolFee?: string;
+        commissionEnabled?: boolean;
+        commissionAmount?: string;
+        commissionDecimals?: number;
     };
+    mintTxHash?: string;
+    etherscanTxUrl?: string;
 };
 
 /**
@@ -111,7 +113,7 @@ const handler = async (
 
         const publicClient = createPublicClient({
             chain,
-            transport: http()
+            transport: getRpcTransport(chain.id),
         });
 
         // Fetch contract data for validation via a single multicall.
@@ -134,7 +136,7 @@ const handler = async (
         const walletClient = createWalletClient({
             account,
             chain,
-            transport: http(),
+            transport: getRpcTransport(chain.id),
         });
 
         const forwarderAbi = [
@@ -302,7 +304,7 @@ const handler = async (
             address: forwarderAddress,
             abi: forwarderAbi as any,
             functionName: functionName as any,
-            args: args as any
+            args: args as any,
         });
 
         logDev("Minting transaction sent. Hash:", hash);
@@ -311,30 +313,34 @@ const handler = async (
         const txReceipt = await publicClient.waitForTransactionReceipt({ hash });
         if (txReceipt.status !== "success") {
             console.error("Transaction failed:", txReceipt);
-            throw new Error("Minting transaction failed");
+            throw new Error(`Minting transaction reverted on-chain (tx: ${hash})`);
         }
         logDev("Minting transaction successful! Hash:", hash);
         const etherscanTxUrl = `${chain.blockExplorers?.default.url}/tx/${hash}`;
+
+        const mintParams = {
+            chainId: String(chain.id),
+            contractAddress,
+            amount: amountStr,
+            usdcAddress: USDC_ADDRESS,
+            ...(isDev && {
+                mintFee: mintFee.toString(),
+                protocolFee: totalProtocolFee.toString(),
+                commissionEnabled: COMMISSION_ENABLED,
+                commissionAmount: COMMISSION_ENABLED ? COMMISSION_AMOUNT.toString() : "0",
+                commissionDecimals: COMMISSION_DECIMALS,
+            }),
+        };
 
         // Return the authorization data for on-chain execution
         // The client/contract can use this to call transferWithAuthorization atomically
         return NextResponse.json({
             success: true,
             message: "Payment verified and minted on-chain!",
-            authorization: ctx.paymentAuth,
-            mintParams: {
-                chainId: String(chain.id),
-                contractAddress,
-                amount: amountStr,
-                mintFee: mintFee.toString(),
-                protocolFee: totalProtocolFee.toString(),
-                commissionEnabled: COMMISSION_ENABLED,
-                commissionAmount: COMMISSION_ENABLED ? COMMISSION_AMOUNT.toString() : "0",
-                commissionDecimals: COMMISSION_DECIMALS,
-                usdcAddress: USDC_ADDRESS,
-            },
+            ...(isDev && { authorization: ctx.paymentAuth }),
+            mintParams,
             mintTxHash: hash,
-            etherscanTxUrl: etherscanTxUrl,
+            etherscanTxUrl,
         });
 
     } catch (error) {
@@ -342,7 +348,7 @@ const handler = async (
         return NextResponse.json(
             {
                 error: "Verification failed",
-                details: error instanceof Error ? error.message : String(error)
+                details: extractOnchainErrorMessage(error),
             } as unknown as VerifyOnlyResponse,
             { status: 500 }
         );
@@ -505,7 +511,7 @@ function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
 }
 
 export async function GET(req: NextRequest, props: { params: Promise<{ chainId: string, contractAddress: string, amount: string }> }) {
-    console.log("Se llama al GET ");
+    logDev("GET /x402mint request received");
     const params = await props.params;
     const { chainId, contractAddress, amount } = params;
 
@@ -596,7 +602,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
     const actionName = `Mint ${amount} NFT${amount === "1" ? "" : "s"} from ${mintingPageInfo?.name}`;
 
-    console.log("se crea el paywall");
+    logDev("Creating paywall");
     const dynamicPaywall = createPaywall()
         .withNetwork(evmPaywall)
         .withConfig({
@@ -608,7 +614,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     // Use withX402VerifyOnly instead of withX402
     // This verifies payment but does NOT settle - we handle settlement on-chain
-    console.log("se crea el protectedHandler llamando a withX402VerifyOnly");
+    logDev("Creating protectedHandler via withX402VerifyOnly");
     const protectedHandler = withX402VerifyOnly(
         (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount, contractData),
         getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount, contractData) as any,
