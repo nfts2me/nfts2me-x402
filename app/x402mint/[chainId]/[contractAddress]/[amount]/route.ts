@@ -10,7 +10,12 @@ import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
 import { facilitator } from "@coinbase/x402";
 import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet, ZERO_ADDRESS } from "../../../../../lib/networks";
-import { getRpcTransport, extractOnchainErrorMessage } from "../../../../../lib/rpc";
+import {
+    getRpcTransport,
+    extractOnchainErrorMessage,
+    toUserFacingMintError,
+    toHttpStatusText,
+} from "../../../../../lib/rpc";
 import { cacheLife } from "next/cache";
 
 const isDev = process.env.NODE_ENV === "development";
@@ -345,12 +350,14 @@ const handler = async (
 
     } catch (error) {
         console.error("Verification handler failed:", error);
+        const details = toUserFacingMintError(extractOnchainErrorMessage(error));
+        // El paywall x402 solo muestra `status` + `statusText` en errores HTTP, no lee el JSON body.
         return NextResponse.json(
             {
-                error: "Verification failed",
-                details: extractOnchainErrorMessage(error),
+                error: details,
+                details,
             } as unknown as VerifyOnlyResponse,
-            { status: 500 }
+            { status: 500, statusText: toHttpStatusText(details) },
         );
     }
 };

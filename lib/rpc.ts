@@ -29,3 +29,31 @@ export function extractOnchainErrorMessage(error: unknown): string {
     }
     return String(error);
 }
+
+/**
+ * Mensaje orientado al usuario final para mostrar en el paywall.
+ * El paywall de x402 solo lee status + statusText en respuestas no-OK, no el JSON body.
+ */
+export function toUserFacingMintError(message: string): string {
+    if (
+        /insufficient funds for transfer/i.test(message) ||
+        /exceeds the balance of the account/i.test(message)
+    ) {
+        return "Minting failed: server wallet has insufficient native tokens to pay for gas.";
+    }
+    return message;
+}
+
+/**
+ * Sanitiza un mensaje para usarlo como HTTP statusText (visible en el paywall).
+ */
+export function toHttpStatusText(message: string, maxLength = 120): string {
+    const sanitized = message
+        .replace(/[\r\n]+/g, " ")
+        .replace(/[^\t\x20-\x7E]/g, "")
+        .trim();
+
+    if (!sanitized) return "Minting failed";
+    if (sanitized.length <= maxLength) return sanitized;
+    return `${sanitized.slice(0, maxLength - 3)}...`;
+}
