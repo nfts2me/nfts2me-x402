@@ -3,12 +3,13 @@ import { createPublicClient, createWalletClient, formatUnits, Chain, isAddress }
 import { privateKeyToAccount } from "viem/accounts";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
+import { bazaarResourceServerExtension, declareDiscoveryExtension } from "@x402/extensions/bazaar";
 import { getMintingPageLogoAndName } from "../../../../../lib/supabase";
 import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
-import { facilitator } from "@coinbase/x402";
+// import { facilitator } from "@coinbase/x402";
 import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet, ZERO_ADDRESS } from "../../../../../lib/networks";
 import {
     getRpcTransport,
@@ -19,6 +20,7 @@ import {
 import { cacheLife } from "next/cache";
 
 const isDev = process.env.NODE_ENV === "development";
+const NFTS2ME_BAZAAR_ICON_URL = "https://app.nfts2me.com/assets/images/logo-text.svg";
 
 function logDev(...args: any[]) {
     if (isDev) {
@@ -367,14 +369,22 @@ const handler = async (
  * Fetches the mint fee dynamically from the contract
  */
 function getMintNftX402Config(
-    actionName: string, 
-    chain: Chain, 
-    network: string, 
-    contractAddress: string, 
+    collectionName: string,
+    collectionLogo: string | undefined,
+    chain: Chain,
+    network: `${string}:${string}`,
+    contractAddress: string,
     amount: string,
     contractData: { protocolFee: bigint; erc20PaymentAddress: `0x${string}`; mintFee: bigint; quoteForOneEth: bigint }
 ) {
     const forwarderAddress = getForwarderAddress(chain.id);
+    const canonicalContractAddress = contractAddress.toLowerCase();
+    const blockExplorerUrl = chain.blockExplorers?.default.url || "https://app.nfts2me.com";
+    const chainTag = chain.id === 8453 ? "base" : chain.id === 84532 ? "base-sepolia" : "evm";
+    const description =
+        `Mint NFTs from the "${collectionName}" collection on ${chain.name} through NFTs2Me using x402. ` +
+        `Set the amount in the URL to the number of NFTs to mint. Collection contract: ${canonicalContractAddress}.`;
+
     return {
         accepts: [
             {
@@ -427,63 +437,68 @@ function getMintNftX402Config(
                 payTo: forwarderAddress,
             },
         ],
-        description: actionName,
+        description,
         mimeType: "application/json",
+        serviceName: toBazaarServiceName(collectionName),
+        tags: ["nft", "mint", "erc721", "nfts2me", chainTag],
+        iconUrl: getBazaarIconUrl(collectionLogo),
         extensions: {
-            bazaar: {
-                discoverable: true,
-                category: "nfts",
-                tags: ["mint", "nft", "nfts", "erc721", "nfts2me"],
-                info: {
-                    input: {
-                        type: "http",
-                        method: "GET",
-                        pathParams: {
-                            chainId: chain.id.toString(),
-                            contractAddress: contractAddress,
-                            amount: amount
+            ...declareDiscoveryExtension({
+                pathParams: {
+                    amount,
+                },
+                pathParamsSchema: {
+                    properties: {
+                        amount: {
+                            type: "string",
+                            pattern: "^[1-9][0-9]*$",
+                            description: "Positive integer number of NFTs to mint from this collection",
                         },
-                        routeTemplate: "/x402mint/:chainId/:contractAddress/:amount"
                     },
-                    inputSchema: {
+                    required: ["amount"],
+                    additionalProperties: false,
+                },
+                output: {
+                    example: {
+                        success: true,
+                        message: "Payment verified and minted on-chain!",
+                        mintParams: {
+                            chainId: chain.id.toString(),
+                            contractAddress: canonicalContractAddress,
+                            amount,
+                            usdcAddress: getUsdcAddress(chain.id),
+                        },
+                        mintTxHash: `0x${"0".repeat(64)}`,
+                        etherscanTxUrl: `${blockExplorerUrl}/tx/0x${"0".repeat(64)}`,
+                    },
+                    schema: {
                         type: "object",
                         properties: {
-                            chainId: {
-                                type: "string",
-                                description: "EVM Chain ID (8453 for Base Mainnet, 84532 for Base Sepolia)"
+                            success: { type: "boolean" },
+                            message: { type: "string" },
+                            mintParams: {
+                                type: "object",
+                                properties: {
+                                    chainId: { type: "string" },
+                                    contractAddress: { type: "string" },
+                                    amount: { type: "string" },
+                                    usdcAddress: { type: "string" },
+                                },
+                                required: ["chainId", "contractAddress", "amount", "usdcAddress"],
                             },
-                            contractAddress: {
+                            mintTxHash: {
                                 type: "string",
-                                description: "The EVM address of the NFT collection contract"
+                                pattern: "^0x[a-fA-F0-9]{64}$",
                             },
-                            amount: {
+                            etherscanTxUrl: {
                                 type: "string",
-                                description: "The number of NFTs to mint"
-                            }
+                                format: "uri",
+                            },
                         },
-                        required: ["chainId", "contractAddress", "amount"]
+                        required: ["success", "message", "mintParams", "mintTxHash", "etherscanTxUrl"],
                     },
-                    output: {
-                        type: "json",
-                        example: {
-                            success: true,
-                            message: "Payment verified and minted on-chain!",
-                            mintTxHash: "0x...",
-                            etherscanTxUrl: "https://..."
-                        },
-                        schema: {
-                            type: "object",
-                            properties: {
-                                success: { type: "boolean" },
-                                message: { type: "string" },
-                                mintTxHash: { type: "string" },
-                                etherscanTxUrl: { type: "string" }
-                            },
-                            required: ["success", "message", "mintTxHash"]
-                        }
-                    }
-                }
-            },
+                },
+            }),
         },
     };
 }
@@ -515,6 +530,29 @@ function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
         return ipfsUrl.replace("ipfs://", "https://ipfs.io/ipfs/");
     }
     return ipfsUrl;
+}
+
+function getBazaarIconUrl(collectionLogo?: string): string {
+    const logoUrl = formatLogoUrl(collectionLogo);
+    if (!logoUrl) return NFTS2ME_BAZAAR_ICON_URL;
+
+    try {
+        const parsedUrl = new URL(logoUrl);
+        return parsedUrl.protocol === "https:" || parsedUrl.protocol === "http:"
+            ? logoUrl
+            : NFTS2ME_BAZAAR_ICON_URL;
+    } catch {
+        return NFTS2ME_BAZAAR_ICON_URL;
+    }
+}
+
+function toBazaarServiceName(collectionName: string): string {
+    const printableAsciiName = collectionName
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^\x20-\x7E]/g, "")
+        .trim();
+    return (printableAsciiName || "NFTs2Me").slice(0, 32);
 }
 
 export async function GET(req: NextRequest, props: { params: Promise<{ chainId: string, contractAddress: string, amount: string }> }) {
@@ -604,10 +642,14 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     const dynamicServer = new x402ResourceServer(facilitatorClient);
     registerExactEvmScheme(dynamicServer);
+    dynamicServer.registerExtension(bazaarResourceServerExtension);
 
     const appName = mintingPageInfo?.name || process.env.APP_NAME || "NFTs2Me x402 Service";
     const appLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo) || process.env.APP_LOGO || "/x402-icon-blue.png";
-    const actionName = `Mint ${amount} NFT${amount === "1" ? "" : "s"} from ${mintingPageInfo?.name}`;
+    const collectionName =
+        mintingPageInfo?.name ||
+        `NFT ${contractAddress.slice(0, 10)}...${contractAddress.slice(-4)}`;
+    const collectionLogo = formatLogoUrl(mintingPageInfo?.ipfs_logo);
 
     logDev("Creating paywall");
     const dynamicPaywall = createPaywall()
@@ -622,11 +664,22 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     // Use withX402VerifyOnly instead of withX402
     // This verifies payment but does NOT settle - we handle settlement on-chain
     logDev("Creating protectedHandler via withX402VerifyOnly");
+    // Keep the collection identity concrete and only the amount dynamic so Bazaar
+    // creates one catalog entry per collection instead of one global gateway entry.
+    const bazaarRoutePattern = `GET /x402mint/${chain.id}/${contractAddress.toLowerCase()}/:amount`;
     const protectedHandler = withX402VerifyOnly(
         (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount, contractData),
-        getMintNftX402Config(actionName, chain, `eip155:${chain.id}`, contractAddress, amount, contractData) as any,
+        getMintNftX402Config(
+            collectionName,
+            collectionLogo,
+            chain,
+            `eip155:${chain.id}`,
+            contractAddress,
+            amount,
+            contractData,
+        ),
         dynamicServer,
-        "/x402mint/:chainId/:contractAddress/:amount",
+        bazaarRoutePattern,
         undefined,
         dynamicPaywall
     );
