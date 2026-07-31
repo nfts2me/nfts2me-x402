@@ -383,7 +383,7 @@ function getMintNftX402Config(
     const chainTag = chain.id === 8453 ? "base" : chain.id === 84532 ? "base-sepolia" : "evm";
     const description =
         `Mint NFTs from the "${collectionName}" collection on ${chain.name} through NFTs2Me using x402. ` +
-        `Set the amount in the URL to the number of NFTs to mint. Collection contract: ${canonicalContractAddress}.`;
+        `Set the amount in the URL to the number of NFTs to mint. Collection contract: ${canonicalContractAddress}`;
 
     return {
         accepts: [

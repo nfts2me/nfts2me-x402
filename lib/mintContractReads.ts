@@ -14,8 +14,29 @@ export const ABI_CHECKS = [
     { inputs: [], name: "protocolFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
     { inputs: [], name: "erc20PaymentAddress", outputs: [{ type: "address" }], type: "function", stateMutability: "view" },
     { inputs: [{ type: "uint256", name: "amount" }], name: "mintFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
+    // v1 contracts expose mintPrice() (per unit) instead of mintFee(amount)
+    { inputs: [], name: "mintPrice", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
     { inputs: [], name: "name", outputs: [{ type: "string" }], type: "function", stateMutability: "view" },
 ] as const;
+
+type MulticallResult<T> =
+    | { status: "success"; result: T }
+    | { status: "failure"; error: Error };
+
+/** Prefer v2 mintFee(amount); fall back to v1 mintPrice() * amount. */
+function resolveMintFee(
+    mintFeeResult: MulticallResult<bigint>,
+    mintPriceResult: MulticallResult<bigint>,
+    amount: bigint,
+): bigint {
+    if (mintFeeResult.status === "success") {
+        return mintFeeResult.result;
+    }
+    if (mintPriceResult.status === "success") {
+        return mintPriceResult.result * amount;
+    }
+    throw new Error("Failed to read mintFee/mintPrice via multicall");
+}
 
 export const ERC20_ALLOWANCE_ABI = [
     {
@@ -92,9 +113,9 @@ export async function readMintContractDataWithMulticall(
         "type": "function"
     }] as const;
 
-    const [protocolFee, erc20PaymentAddress, mintFee, quoteForOneEth] = await publicClient.multicall({
+    const results = await publicClient.multicall({
         multicallAddress,
-        allowFailure: false,
+        allowFailure: true,
         contracts: [
             {
                 address: contractAddress,
@@ -113,6 +134,11 @@ export async function readMintContractDataWithMulticall(
                 args: [amount],
             },
             {
+                address: contractAddress,
+                abi: ABI_CHECKS,
+                functionName: "mintPrice",
+            },
+            {
                 address: forwarderAddress,
                 abi: quoteAbi,
                 functionName: "quoteUSDCForNative",
@@ -121,7 +147,31 @@ export async function readMintContractDataWithMulticall(
         ],
     });
 
-    return { protocolFee, erc20PaymentAddress, mintFee, quoteForOneEth };
+    const [
+        protocolFeeResult,
+        erc20PaymentAddressResult,
+        mintFeeResult,
+        mintPriceResult,
+        quoteForOneEthResult,
+    ] = results;
+
+    // v1 contracts may not have protocolFee; treat a revert as 0
+    const protocolFee = protocolFeeResult.status === "success" ? protocolFeeResult.result : 0n;
+    const mintFee = resolveMintFee(mintFeeResult, mintPriceResult, amount);
+
+    if (erc20PaymentAddressResult.status !== "success") {
+        throw new Error("Failed to read erc20PaymentAddress via multicall");
+    }
+    if (quoteForOneEthResult.status !== "success") {
+        throw new Error("Failed to read quoteUSDCForNative via multicall");
+    }
+
+    return {
+        protocolFee,
+        erc20PaymentAddress: erc20PaymentAddressResult.result,
+        mintFee,
+        quoteForOneEth: quoteForOneEthResult.result,
+    };
 }
 
 // El allowance es optimistic en el sentido de que suponemos que siempre va a ser USDC. Si no, abajo se soluciona.
@@ -157,6 +207,11 @@ export async function readMintContractDataWithOptimisticAllowance(
                 args: [amount],
             },
             {
+                address: contractAddress,
+                abi: ABI_CHECKS,
+                functionName: "mintPrice",
+            },
+            {
                 address: optimisticTokenAddress,
                 abi: ERC20_ALLOWANCE_ABI,
                 functionName: "allowance",
@@ -165,27 +220,28 @@ export async function readMintContractDataWithOptimisticAllowance(
         ],
     });
 
-    const protocolFeeResult = results[0];
-    const erc20PaymentAddressResult = results[1];
-    const mintFeeResult = results[2];
-    const allowanceResult = results[3];
+    const [
+        protocolFeeResult,
+        erc20PaymentAddressResult,
+        mintFeeResult,
+        mintPriceResult,
+        allowanceResult,
+    ] = results;
 
-    if (protocolFeeResult.status !== "success") {
-        throw new Error("Failed to read protocolFee via multicall");
-    }
+    // v1 contracts may not have protocolFee; treat a revert as 0
+    const protocolFee = protocolFeeResult.status === "success" ? protocolFeeResult.result : 0n;
+    const mintFee = resolveMintFee(mintFeeResult, mintPriceResult, amount);
+
     if (erc20PaymentAddressResult.status !== "success") {
         throw new Error("Failed to read erc20PaymentAddress via multicall");
-    }
-    if (mintFeeResult.status !== "success") {
-        throw new Error("Failed to read mintFee via multicall");
     }
 
     const allowance = allowanceResult.status === "success" ? allowanceResult.result : undefined;
 
     return {
-        protocolFee: protocolFeeResult.result,
+        protocolFee,
         erc20PaymentAddress: erc20PaymentAddressResult.result,
-        mintFee: mintFeeResult.result,
+        mintFee,
         optimisticAllowanceTokenAddress: optimisticTokenAddress,
         optimisticAllowance: allowance,
     };
