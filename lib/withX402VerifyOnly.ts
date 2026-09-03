@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { x402HTTPResourceServer, x402ResourceServer, RouteConfig, PaywallConfig, PaywallProvider } from "@x402/core/server";
 import { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { NextAdapter } from "@x402/next";
+import { alertMintFailure } from "./nativeFundsGuard";
+import { extractOnchainErrorMessage, toHttpStatusText, toUserFacingMintError } from "./rpc";
 
 /**
  * EIP-3009 authorization structure for transferWithAuthorization
@@ -121,66 +123,102 @@ export function withX402VerifyOnly<T = unknown>(
             paymentHeader: request.headers.get("PAYMENT-SIGNATURE") ?? request.headers.get("X-PAYMENT") ?? undefined,
         };
 
-        // Process request - verify payment only
-        const result = await httpServer!.processHTTPRequest(context, paywallConfig);
+        const chainIdFromPath = Number(url.pathname.split("/")[2]);
+        const chainId = Number.isFinite(chainIdFromPath) ? chainIdFromPath : 0;
+        const skipAlert = request.method === "HEAD";
 
-        if (result.type === "payment-error") {
-            // Return 402 or error response
-            const { status, headers, body, isHtml } = result.response;
-            const responseHeaders = new Headers(headers);
+        let verifyContext: VerifyOnlyContext;
+        try {
+            // Process request - verify payment only
+            const result = await httpServer!.processHTTPRequest(context, paywallConfig);
 
-            if (isHtml) {
-                return new NextResponse(body as string, {
+            if (result.type === "payment-error") {
+                const { status, headers, body, isHtml } = result.response;
+                if (status >= 500 && !skipAlert) {
+                    await alertMintFailure({
+                        chainId,
+                        context: "x402mint payment-error",
+                        errorMessage: typeof body === "string" ? body : JSON.stringify(body),
+                        httpStatus: status,
+                        url: url.pathname,
+                    });
+                }
+                const responseHeaders = new Headers(headers);
+
+                if (isHtml) {
+                    return new NextResponse(body as string, {
+                        status,
+                        headers: responseHeaders,
+                    }) as NextResponse<T>;
+                }
+
+                return NextResponse.json(body, {
                     status,
                     headers: responseHeaders,
                 }) as NextResponse<T>;
             }
 
-            return NextResponse.json(body, {
-                status,
-                headers: responseHeaders,
-            }) as NextResponse<T>;
-        }
+            if (result.type === "no-payment-required") {
+                if (!skipAlert) {
+                    await alertMintFailure({
+                        chainId,
+                        context: "x402mint no-payment-required",
+                        errorMessage: "Payment configuration error",
+                        httpStatus: 500,
+                        url: url.pathname,
+                    });
+                }
+                return NextResponse.json(
+                    { error: "Payment configuration error" },
+                    { status: 500 }
+                ) as NextResponse<T>;
+            }
 
-        if (result.type === "no-payment-required") {
-            // This shouldn't happen if route is configured, but handle gracefully
+            // Payment verified! Extract authorization data
+            const { paymentPayload, paymentRequirements } = result;
+
+            // Extract EIP-3009 authorization from payload
+            const payload = paymentPayload.payload as {
+                authorization?: EIP3009Authorization;
+                signature?: string;
+            };
+
+            if (!payload.authorization || !payload.signature) {
+                return NextResponse.json(
+                    { error: "Invalid payment payload: missing authorization data" },
+                    { status: 400 }
+                ) as NextResponse<T>;
+            }
+
+            verifyContext = {
+                paymentAuth: {
+                    authorization: payload.authorization,
+                    signature: payload.signature,
+                },
+                paymentPayload,
+                paymentRequirements,
+            };
+        } catch (error) {
+            const rawMessage = extractOnchainErrorMessage(error);
+            const details = toUserFacingMintError(rawMessage);
+            if (!skipAlert) {
+                await alertMintFailure({
+                    chainId,
+                    context: "x402mint verify wrapper",
+                    errorMessage: rawMessage,
+                    userFacingMessage: details,
+                    httpStatus: 500,
+                    url: url.pathname,
+                });
+            }
             return NextResponse.json(
-                { error: "Payment configuration error" },
-                { status: 500 }
+                { error: details, details },
+                { status: 500, statusText: toHttpStatusText(details) },
             ) as NextResponse<T>;
         }
-
-        // Payment verified! Extract authorization data
-        const { paymentPayload, paymentRequirements } = result;
-
-        // Extract EIP-3009 authorization from payload
-        const payload = paymentPayload.payload as {
-            authorization?: EIP3009Authorization;
-            signature?: string;
-        };
-
-        if (!payload.authorization || !payload.signature) {
-            return NextResponse.json(
-                { error: "Invalid payment payload: missing authorization data" },
-                { status: 400 }
-            ) as NextResponse<T>;
-        }
-
-        const paymentAuth: PaymentAuthorization = {
-            authorization: payload.authorization,
-            signature: payload.signature,
-        };
-
-        const verifyContext: VerifyOnlyContext = {
-            paymentAuth,
-            paymentPayload,
-            paymentRequirements,
-        };
 
         // Call the handler with verification context
         // NOTE: We do NOT call processSettlement() - that's the key difference!
-        const handlerResponse = await routeHandler(request, verifyContext);
-
-        return handlerResponse;
+        return await routeHandler(request, verifyContext);
     };
 }

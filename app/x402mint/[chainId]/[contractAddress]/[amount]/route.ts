@@ -18,6 +18,7 @@ import {
     toHttpStatusText,
 } from "../../../../../lib/rpc";
 import { cacheLife } from "next/cache";
+import { alertMintFailure } from "../../../../../lib/nativeFundsGuard";
 
 const isDev = process.env.NODE_ENV === "development";
 const NFTS2ME_BAZAAR_ICON_URL = "https://app.nfts2me.com/assets/images/logo-text.svg";
@@ -115,6 +116,10 @@ const handler = async (
     amountStr: string,
     contractData: { protocolFee: bigint; erc20PaymentAddress: `0x${string}`; mintFee: bigint; quoteForOneEth: bigint }
 ): Promise<NextResponse<VerifyOnlyResponse>> => {
+    let functionName: string | undefined;
+    let args: unknown;
+    let forwarderAddress: `0x${string}` | undefined;
+
     try {
         const amount = BigInt(amountStr || "1");
 
@@ -217,8 +222,8 @@ const handler = async (
         const isErc20Usdc = contractPaymentAddress.toLowerCase() === USDC_ADDRESS.toLowerCase();
         const isErc20Native = contractPaymentAddress === ZERO_ADDRESS;
 
-        let functionName: 'mintWithAuthorization' | 'mintWithAuthorizationNative' | 'mintWithAuthorizationUSDCWithNativeProtocolFee';
-        let args: any[];
+        let resolvedFunctionName: 'mintWithAuthorization' | 'mintWithAuthorizationNative' | 'mintWithAuthorizationUSDCWithNativeProtocolFee';
+        let resolvedArgs: any[];
 
         // Extract signature components
         const v = parseInt(ctx.paymentAuth.signature.startsWith("0x") ? ctx.paymentAuth.signature.slice(130, 132) : ctx.paymentAuth.signature.slice(128, 130), 16);
@@ -236,8 +241,8 @@ const handler = async (
             if (totalProtocolFee === 0n) {
                 logDev("Case 1: USDC, no protocol fee");
                 // Case 1: USDC, no protocol fee
-                functionName = 'mintWithAuthorization';
-                args = [
+                resolvedFunctionName = 'mintWithAuthorization';
+                resolvedArgs = [
                     USDC_ADDRESS,
                     contractAddress as `0x${string}`,
                     erc20Amount,
@@ -255,8 +260,8 @@ const handler = async (
                 logDev("Case 2: USDC, with protocol fee (native ETH)");
                 // Case 2: USDC, with protocol fee (native ETH)
                 const poolAddress = getWETHUSDCPoolAddress(chain.id);
-                functionName = 'mintWithAuthorizationUSDCWithNativeProtocolFee';
-                args = [
+                resolvedFunctionName = 'mintWithAuthorizationUSDCWithNativeProtocolFee';
+                resolvedArgs = [
                     USDC_ADDRESS,
                     contractAddress as `0x${string}`,
                     poolAddress,
@@ -283,8 +288,8 @@ const handler = async (
             // Case 3 & 4: Native ETH
             const poolAddress = getWETHUSDCPoolAddress(chain.id);
             const mintingFeeAmount = totalProtocolFee === 0n ? mintFee : mintFee + totalProtocolFee;
-            functionName = 'mintWithAuthorizationNative';
-            args = [
+            resolvedFunctionName = 'mintWithAuthorizationNative';
+            resolvedArgs = [
                 USDC_ADDRESS,
                 contractAddress as `0x${string}`,
                 poolAddress,
@@ -300,18 +305,20 @@ const handler = async (
                 to,
                 amount
             ];
-            logDev("DEBUG: Args: ", args);
+            logDev("DEBUG: Args: ", resolvedArgs);
         } else {
             throw new Error("Invalid payment configuration");
         }
 
-        const forwarderAddress = getForwarderAddress(chain.id);
+        functionName = resolvedFunctionName;
+        args = resolvedArgs;
+        forwarderAddress = getForwarderAddress(chain.id);
         logDev("Before sending transaction");
         const hash = await walletClient.writeContract({
             address: forwarderAddress,
             abi: forwarderAbi as any,
-            functionName: functionName as any,
-            args: args as any,
+            functionName: resolvedFunctionName as any,
+            args: resolvedArgs as any,
         });
 
         logDev("Minting transaction sent. Hash:", hash);
@@ -352,7 +359,27 @@ const handler = async (
 
     } catch (error) {
         console.error("Verification handler failed:", error);
-        const details = toUserFacingMintError(extractOnchainErrorMessage(error));
+        const rawMessage = extractOnchainErrorMessage(error);
+        const details = toUserFacingMintError(rawMessage);
+
+        try {
+            await alertMintFailure({
+                chainId: chain.id,
+                context: "x402mint settlement",
+                errorMessage: rawMessage,
+                userFacingMessage: details,
+                httpStatus: 500,
+                url: `/x402mint/${chain.id}/${contractAddress}/${amountStr}`,
+                contractAddress,
+                amount: amountStr,
+                functionName,
+                forwarderAddress,
+                args,
+                paymentAuth: ctx.paymentAuth,
+            });
+        } catch {
+            // No dejamos que alertas por Telegram rompan la respuesta del endpoint.
+        }
         // El paywall x402 solo muestra `status` + `statusText` en errores HTTP, no lee el JSON body.
         return NextResponse.json(
             {
@@ -601,7 +628,8 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         );
     }
 
-    // Precarga de datos del contrato para evitar llamadas duplicadas al RPC
+    try {
+        // Precarga de datos del contrato para evitar llamadas duplicadas al RPC
     const cachedContractData = await getCachedMintContractData(
         chain.id,
         contractAddress as `0x${string}`,
@@ -685,4 +713,29 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     );
 
     return protectedHandler(req);
+    } catch (error) {
+        console.error("GET /x402mint failed:", error);
+        const rawMessage = extractOnchainErrorMessage(error);
+        const details = toUserFacingMintError(rawMessage);
+        try {
+            if (req.method !== "HEAD") {
+                await alertMintFailure({
+                    chainId: chain.id,
+                    context: "x402mint GET",
+                    errorMessage: rawMessage,
+                    userFacingMessage: details,
+                    httpStatus: 500,
+                    url: `/x402mint/${chainId}/${contractAddress}/${amount}`,
+                    contractAddress,
+                    amount,
+                });
+            }
+        } catch {
+            // No dejamos que Telegram rompa la respuesta.
+        }
+        return NextResponse.json(
+            { error: details, details },
+            { status: 500, statusText: toHttpStatusText(details) },
+        );
+    }
 }
