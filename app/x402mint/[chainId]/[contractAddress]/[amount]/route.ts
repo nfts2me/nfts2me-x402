@@ -15,7 +15,7 @@ import {
     getRpcTransport,
     extractOnchainErrorMessage,
     toUserFacingMintError,
-    toHttpStatusText,
+    mintErrorResponseInit,
 } from "../../../../../lib/rpc";
 import { cacheLife } from "next/cache";
 import { alertMintFailure } from "../../../../../lib/nativeFundsGuard";
@@ -380,13 +380,13 @@ const handler = async (
         } catch {
             // No dejamos que alertas por Telegram rompan la respuesta del endpoint.
         }
-        // El paywall x402 solo muestra `status` + `statusText` en errores HTTP, no lee el JSON body.
+        // HTTP/2 ignora statusText; el paywall lo recupera de x-x402-error / JSON vía el parche del HTML 402.
         return NextResponse.json(
             {
                 error: details,
                 details,
             } as unknown as VerifyOnlyResponse,
-            { status: 500, statusText: toHttpStatusText(details) },
+            mintErrorResponseInit(details),
         );
     }
 };
@@ -735,7 +735,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         }
         return NextResponse.json(
             { error: details, details },
-            { status: 500, statusText: toHttpStatusText(details) },
+            mintErrorResponseInit(details),
         );
     }
 }

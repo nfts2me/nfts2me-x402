@@ -3,7 +3,7 @@ import { x402HTTPResourceServer, x402ResourceServer, RouteConfig, PaywallConfig,
 import { PaymentPayload, PaymentRequirements } from "@x402/core/types";
 import { NextAdapter } from "@x402/next";
 import { alertMintFailure } from "./nativeFundsGuard";
-import { extractOnchainErrorMessage, toHttpStatusText, toUserFacingMintError } from "./rpc";
+import { extractOnchainErrorMessage, injectPaywallErrorFetchPatch, mintErrorResponseInit, toUserFacingMintError } from "./rpc";
 
 /**
  * EIP-3009 authorization structure for transferWithAuthorization
@@ -146,7 +146,7 @@ export function withX402VerifyOnly<T = unknown>(
                 const responseHeaders = new Headers(headers);
 
                 if (isHtml) {
-                    return new NextResponse(body as string, {
+                    return new NextResponse(injectPaywallErrorFetchPatch(body as string), {
                         status,
                         headers: responseHeaders,
                     }) as NextResponse<T>;
@@ -213,7 +213,7 @@ export function withX402VerifyOnly<T = unknown>(
             }
             return NextResponse.json(
                 { error: details, details },
-                { status: 500, statusText: toHttpStatusText(details) },
+                mintErrorResponseInit(details),
             ) as NextResponse<T>;
         }
 

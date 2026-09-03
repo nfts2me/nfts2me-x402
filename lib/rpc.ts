@@ -112,3 +112,68 @@ export function toHttpStatusText(message: string, maxLength = 220): string {
     }
     return `${sanitized.slice(0, prefixBudget).trim()}... ${hint}`;
 }
+
+/** HTTP/2 no transmite statusText; el paywall lo lee de esta cabecera vía un parche en el HTML 402. */
+export const X402_ERROR_HEADER = "x-x402-error";
+
+export function mintErrorResponseInit(message: string, status = 500) {
+    const statusText = toHttpStatusText(message);
+    return {
+        status,
+        statusText,
+        headers: {
+            [X402_ERROR_HEADER]: statusText,
+        },
+    };
+}
+
+const PAYWALL_ERROR_FETCH_PATCH = `<script data-x402-error-fetch-patch="1">
+(() => {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = async function (...args) {
+    const res = await origFetch(...args);
+    if (res.ok) return res;
+    let statusText = res.headers.get("x-x402-error") || res.statusText;
+    if (!statusText || statusText === "Internal Server Error") {
+      const contentType = res.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        try {
+          const data = await res.clone().json();
+          statusText = data.details || data.error || data.message || statusText;
+        } catch {}
+      }
+    }
+    if (!statusText) return res;
+    return new Response(res.body, {
+      status: res.status,
+      statusText: String(statusText).replace(/[\\r\\n]+/g, " ").slice(0, 250),
+      headers: res.headers,
+    });
+  };
+})();
+</script>`;
+
+export function injectPaywallErrorFetchPatch(html: string): string {
+    let patched = html;
+
+    // El paywall de x402 trata un balanceOf fallido como 0n y bloquea el pago
+    // ("Insufficient balance") aunque el usuario sí tenga USDC. Si no se ha
+    // podido leer el saldo, devolvemos null y el Pay now sigue adelante.
+    // replaceAll: el bundle actual tiene una coincidencia, pero un minificado
+    // futuro (u otro template EVM/SVM) podría repetir el helper de balance.
+    patched = patched.replaceAll(
+        'catch(n){return console.error("Failed to fetch token balance:",n),0n}',
+        'catch(n){return console.error("Failed to fetch token balance:",n),null}',
+    );
+    patched = patched.replaceAll(
+        "let[Z,z]=await Promise.all([iJ(P,r,ie),$ze(P,ie)]);M(y1(Z,z))",
+        "let[Z,z]=await Promise.all([iJ(P,r,ie),$ze(P,ie)]);Z!=null&&M(y1(Z,z))",
+    );
+
+    if (patched.includes("data-x402-error-fetch-patch")) return patched;
+    const headClose = /<\/head>/i;
+    if (headClose.test(patched)) {
+        return patched.replace(headClose, `${PAYWALL_ERROR_FETCH_PATCH}$&`);
+    }
+    return `${PAYWALL_ERROR_FETCH_PATCH}${patched}`;
+}
