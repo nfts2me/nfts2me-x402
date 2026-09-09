@@ -1,4 +1,4 @@
-import { Chain } from "viem";
+import { Chain, zeroAddress } from "viem";
 import { base, baseSepolia, polygon } from "viem/chains";
 
 export const USDC_ADDRESSES: Record<number, `0x${string}`> = {
@@ -45,8 +45,6 @@ export const WETH_USDC_POOLS: Record<number, `0x${string}`> = {
     84532: "0x46880b404CD35c165EDdefF7421019F8dD25F4Ad", // Base Sepolia
 };
 
-export const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as `0x${string}`;
-
 // URLs alternativas de RPC por cadena (añadir manualmente según necesidad).
 // El transporte fallback usa el RPC por defecto de viem como primario y estas como respaldo.
 export const RPC_URLS: Record<number, string[]> = {
@@ -66,4 +64,49 @@ export const MULTICALL3_ADDRESSES: Record<number, readonly `0x${string}`[]> = {
 
 export function isTestnet(chainId: string | number): boolean {
     return TESTNET_CHAIN_IDS.includes(String(chainId));
+}
+
+export function getCollectionMintingPageUrl(
+    contractAddress: string,
+    chainId: string | number,
+): string {
+    return `https://${contractAddress}_${chainId}.nfts2.me/`;
+}
+
+export type PaymentTokenInfo = {
+    kind: "native" | "usdc" | "other";
+    label: "Native" | "USDC" | "Other";
+    tokenAddress: string;
+    contractPaymentAddress: string;
+};
+
+export function describePaymentToken(
+    chainId: number,
+    paymentAddress?: string | null,
+): PaymentTokenInfo | undefined {
+    if (!paymentAddress) return undefined;
+    const normalized = paymentAddress.toLowerCase();
+    if (normalized === zeroAddress.toLowerCase()) {
+        return {
+            kind: "native",
+            label: "Native",
+            tokenAddress: zeroAddress,
+            contractPaymentAddress: paymentAddress,
+        };
+    }
+    const usdc = USDC_ADDRESSES[chainId];
+    if (usdc && normalized === usdc.toLowerCase()) {
+        return {
+            kind: "usdc",
+            label: "USDC",
+            tokenAddress: usdc,
+            contractPaymentAddress: paymentAddress,
+        };
+    }
+    return {
+        kind: "other",
+        label: "Other",
+        tokenAddress: paymentAddress,
+        contractPaymentAddress: paymentAddress,
+    };
 }

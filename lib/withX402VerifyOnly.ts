@@ -42,6 +42,26 @@ export type VerifyOnlyHandler<T = unknown> = (
     context: VerifyOnlyContext
 ) => Promise<NextResponse<T>>;
 
+export type VerifyOnlyAlertExtras = {
+    contractAddress?: string;
+    amount?: string;
+    erc20PaymentAddress?: string;
+};
+
+function parseX402mintPath(pathname: string): {
+    chainId: number;
+    contractAddress?: string;
+    amount?: string;
+} {
+    const parts = pathname.split("/").filter(Boolean);
+    const chainId = Number(parts[1]);
+    return {
+        chainId: Number.isFinite(chainId) ? chainId : 0,
+        contractAddress: parts[2],
+        amount: parts[3],
+    };
+}
+
 /**
  * Wraps a Next.js App Router API route handler with x402 payment verification ONLY.
  * 
@@ -76,7 +96,8 @@ export function withX402VerifyOnly<T = unknown>(
     routePattern: string = "*",
     paywallConfig?: PaywallConfig,
     paywall?: PaywallProvider,
-    syncFacilitatorOnStart: boolean = true
+    syncFacilitatorOnStart: boolean = true,
+    alertExtras?: VerifyOnlyAlertExtras,
 ): (request: NextRequest) => Promise<NextResponse<T>> {
     // Create an HTTP resource server for this route config.
     // Do not reuse a cached instance when routeConfig can change between requests,
@@ -123,9 +144,20 @@ export function withX402VerifyOnly<T = unknown>(
             paymentHeader: request.headers.get("PAYMENT-SIGNATURE") ?? request.headers.get("X-PAYMENT") ?? undefined,
         };
 
-        const chainIdFromPath = Number(url.pathname.split("/")[2]);
-        const chainId = Number.isFinite(chainIdFromPath) ? chainIdFromPath : 0;
+        const pathInfo = parseX402mintPath(url.pathname);
+        const chainId = pathInfo.chainId;
+        const contractAddress = alertExtras?.contractAddress ?? pathInfo.contractAddress;
+        const amount = alertExtras?.amount ?? pathInfo.amount;
+        const erc20PaymentAddress = alertExtras?.erc20PaymentAddress;
         const skipAlert = request.method === "HEAD";
+
+        const alertBase = {
+            chainId,
+            url: url.pathname,
+            contractAddress,
+            amount,
+            erc20PaymentAddress,
+        };
 
         let verifyContext: VerifyOnlyContext;
         try {
@@ -136,11 +168,10 @@ export function withX402VerifyOnly<T = unknown>(
                 const { status, headers, body, isHtml } = result.response;
                 if (status >= 500 && !skipAlert) {
                     await alertMintFailure({
-                        chainId,
+                        ...alertBase,
                         context: "x402mint payment-error",
                         errorMessage: typeof body === "string" ? body : JSON.stringify(body),
                         httpStatus: status,
-                        url: url.pathname,
                     });
                 }
                 const responseHeaders = new Headers(headers);
@@ -161,11 +192,10 @@ export function withX402VerifyOnly<T = unknown>(
             if (result.type === "no-payment-required") {
                 if (!skipAlert) {
                     await alertMintFailure({
-                        chainId,
+                        ...alertBase,
                         context: "x402mint no-payment-required",
                         errorMessage: "Payment configuration error",
                         httpStatus: 500,
-                        url: url.pathname,
                     });
                 }
                 return NextResponse.json(
@@ -203,12 +233,11 @@ export function withX402VerifyOnly<T = unknown>(
             const details = toUserFacingMintError(rawMessage);
             if (!skipAlert) {
                 await alertMintFailure({
-                    chainId,
+                    ...alertBase,
                     context: "x402mint verify wrapper",
                     errorMessage: rawMessage,
                     userFacingMessage: details,
                     httpStatus: 500,
-                    url: url.pathname,
                 });
             }
             return NextResponse.json(

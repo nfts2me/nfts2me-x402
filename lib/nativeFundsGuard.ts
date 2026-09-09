@@ -1,7 +1,7 @@
 import { createPublicClient, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getRpcTransport } from "./rpc";
-import { SUPPORTED_CHAINS } from "./networks";
+import { getCollectionMintingPageUrl, describePaymentToken, SUPPORTED_CHAINS, USDC_ADDRESSES } from "./networks";
 import { sendTelegramMessage } from "./telegram";
 
 const PAY_TO_EVM_ADDRESS = process.env.PAY_TO_EVM_ADDRESS;
@@ -94,6 +94,7 @@ export type MintFailureAlert = {
     amount?: string;
     functionName?: string;
     forwarderAddress?: string;
+    erc20PaymentAddress?: string;
     args?: unknown;
     paymentAuth?: unknown;
 };
@@ -114,6 +115,7 @@ export async function alertMintFailure(alert: MintFailureAlert) {
         amount,
         functionName,
         forwarderAddress,
+        erc20PaymentAddress,
         args,
         paymentAuth,
     } = alert;
@@ -137,6 +139,12 @@ export async function alertMintFailure(alert: MintFailureAlert) {
         // ignore
     }
 
+    const paymentToken = describePaymentToken(chainId, erc20PaymentAddress);
+    const mintingPage = contractAddress
+        ? getCollectionMintingPageUrl(contractAddress, chainId)
+        : undefined;
+    const usdcAddress = USDC_ADDRESSES[chainId];
+
     const title = lowFunds
         ? `⚠️ Mint failed: low native gas on ${chainLabel}`
         : `🚨 Mint failed on ${chainLabel}`;
@@ -147,10 +155,15 @@ export async function alertMintFailure(alert: MintFailureAlert) {
         `Context: ${context}`,
         httpStatus != null ? `HTTP: ${httpStatus}` : undefined,
         url ? `URL: ${url}` : undefined,
+        mintingPage ? `Minting page: ${mintingPage}` : undefined,
         `Settlement (gas payer): ${settlement}`,
         forwarderAddress ? `Forwarder: ${forwarderAddress}` : undefined,
         contractAddress ? `Collection: ${contractAddress}` : undefined,
         amount ? `Amount: ${amount}` : undefined,
+        paymentToken ? `Payment token: ${paymentToken.label}` : undefined,
+        paymentToken ? `Token address: ${paymentToken.tokenAddress}` : undefined,
+        paymentToken ? `contractPaymentAddress: ${paymentToken.contractPaymentAddress}` : undefined,
+        usdcAddress ? `USDC (chain): ${usdcAddress}` : undefined,
         functionName ? `Function: ${functionName}` : undefined,
         userFacingMessage ? `User-facing: ${userFacingMessage}` : undefined,
         "",

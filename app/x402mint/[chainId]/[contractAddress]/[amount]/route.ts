@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, createWalletClient, formatUnits, Chain, isAddress } from "viem";
+import { createPublicClient, createWalletClient, formatUnits, Chain, isAddress, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
@@ -10,7 +10,7 @@ import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
 // import { facilitator } from "@coinbase/x402";
-import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet, ZERO_ADDRESS } from "../../../../../lib/networks";
+import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet } from "../../../../../lib/networks";
 import {
     getRpcTransport,
     extractOnchainErrorMessage,
@@ -133,8 +133,8 @@ const handler = async (
         const totalProtocolFee = protocolFeeForOne * amount;
 
         const USDC_ADDRESS = getUsdcAddress(chain.id);
-        if (contractPaymentAddress !== USDC_ADDRESS && contractPaymentAddress !== ZERO_ADDRESS) {
-            throw new Error("Unsupported payment token. Only USDC and Native ETH are supported.");
+        if (contractPaymentAddress !== USDC_ADDRESS && contractPaymentAddress !== zeroAddress) {
+            throw new Error(unsupportedPaymentTokenMessage(chain.id, contractPaymentAddress));
         }
 
         // Log the authorization data for debugging
@@ -220,7 +220,7 @@ const handler = async (
         ] as const;
 
         const isErc20Usdc = contractPaymentAddress.toLowerCase() === USDC_ADDRESS.toLowerCase();
-        const isErc20Native = contractPaymentAddress === ZERO_ADDRESS;
+        const isErc20Native = contractPaymentAddress === zeroAddress;
 
         let resolvedFunctionName: 'mintWithAuthorization' | 'mintWithAuthorizationNative' | 'mintWithAuthorizationUSDCWithNativeProtocolFee';
         let resolvedArgs: any[];
@@ -374,6 +374,7 @@ const handler = async (
                 amount: amountStr,
                 functionName,
                 forwarderAddress,
+                erc20PaymentAddress: contractData.erc20PaymentAddress,
                 args,
                 paymentAuth: ctx.paymentAuth,
             });
@@ -422,12 +423,12 @@ function getMintNftX402Config(
                     const totalProtocolFee = protocolFeeForOne * BigInt(amount);
 
                     const USDC_ADDRESS = getUsdcAddress(chain.id);
-                    if (erc20PaymentAddress !== USDC_ADDRESS && erc20PaymentAddress !== ZERO_ADDRESS) {
-                        throw new Error("Unsupported payment token. Only USDC and Native ETH are supported.");
+                    if (erc20PaymentAddress !== USDC_ADDRESS && erc20PaymentAddress !== zeroAddress) {
+                        throw new Error(unsupportedPaymentTokenMessage(chain.id, erc20PaymentAddress));
                     }
 
                     const isErc20Usdc = erc20PaymentAddress.toLowerCase() === USDC_ADDRESS.toLowerCase();
-                    const isErc20Native = erc20PaymentAddress === ZERO_ADDRESS;
+                    const isErc20Native = erc20PaymentAddress === zeroAddress;
 
                     let finalPrice: bigint;
 
@@ -478,8 +479,8 @@ function getMintNftX402Config(
                     properties: {
                         amount: {
                             type: "string",
-                            pattern: "^[1-9][0-9]*$",
-                            description: "Positive integer number of NFTs to mint from this collection",
+                            pattern: "^[1-9][0-9]{0,5}$",
+                            description: "Positive integer number of NFTs to mint from this collection (1–999999)",
                         },
                     },
                     required: ["amount"],
@@ -573,6 +574,28 @@ function getBazaarIconUrl(collectionLogo?: string): string {
     }
 }
 
+function parseMintAmountParam(raw: string): { ok: true; amount: string } | { ok: false; error: string } {
+    let decoded = raw;
+    try {
+        decoded = decodeURIComponent(raw);
+    } catch {
+        decoded = raw;
+    }
+    decoded = decoded.trim();
+    if (!/^[1-9][0-9]{0,5}$/.test(decoded)) {
+        return {
+            ok: false,
+            error: `Invalid mint amount "${decoded}". Must be a positive integer with no extra characters (1–999999).`,
+        };
+    }
+    return { ok: true, amount: decoded };
+}
+
+function unsupportedPaymentTokenMessage(chainId: number, paymentAddress: string): string {
+    const usdc = getUsdcAddress(chainId);
+    return `Unsupported payment token ${paymentAddress}. Only USDC (${usdc}) and Native ETH (${zeroAddress}) are supported.`;
+}
+
 function toBazaarServiceName(collectionName: string): string {
     const printableAsciiName = collectionName
         .normalize("NFKD")
@@ -619,21 +642,23 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         );
     }
 
-    // 3. Sanitize and validate amount
-    const parsedAmount = parseInt(amount, 10);
-    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+    // 3. Sanitize and validate amount (digits only; reject junk like "1\\")
+    const parsedAmountParam = parseMintAmountParam(amount);
+    if (!parsedAmountParam.ok) {
         return NextResponse.json(
-            { error: `Invalid mint amount: ${amount}. Must be a positive integer.` },
-            { status: 400 }
+            { error: parsedAmountParam.error },
+            mintErrorResponseInit(parsedAmountParam.error, 400),
         );
     }
+    const parsedAmount = parsedAmountParam.amount;
 
+    let erc20PaymentAddress: `0x${string}` | undefined;
     try {
         // Precarga de datos del contrato para evitar llamadas duplicadas al RPC
     const cachedContractData = await getCachedMintContractData(
         chain.id,
         contractAddress as `0x${string}`,
-        BigInt(amount),
+        BigInt(parsedAmount),
     );
 
     const contractData = {
@@ -642,6 +667,7 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         mintFee: BigInt(cachedContractData.mintFee),
         quoteForOneEth: BigInt(cachedContractData.quoteForOneEth),
     } as const;
+    erc20PaymentAddress = contractData.erc20PaymentAddress;
 
     // Fetch minting page info from Supabase
     const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
@@ -696,20 +722,26 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
     // creates one catalog entry per collection instead of one global gateway entry.
     const bazaarRoutePattern = `GET /x402mint/${chain.id}/${contractAddress.toLowerCase()}/:amount`;
     const protectedHandler = withX402VerifyOnly(
-        (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, amount, contractData),
+        (_request: NextRequest, context: VerifyOnlyContext) => handler(context, chain, contractAddress, parsedAmount, contractData),
         getMintNftX402Config(
             collectionName,
             collectionLogo,
             chain,
             `eip155:${chain.id}`,
             contractAddress,
-            amount,
+            parsedAmount,
             contractData,
         ),
         dynamicServer,
         bazaarRoutePattern,
         undefined,
-        dynamicPaywall
+        dynamicPaywall,
+        true,
+        {
+            contractAddress,
+            amount: parsedAmount,
+            erc20PaymentAddress: contractData.erc20PaymentAddress,
+        },
     );
 
     return protectedHandler(req);
@@ -725,9 +757,10 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
                     errorMessage: rawMessage,
                     userFacingMessage: details,
                     httpStatus: 500,
-                    url: `/x402mint/${chainId}/${contractAddress}/${amount}`,
+                    url: `/x402mint/${chainId}/${contractAddress}/${parsedAmount}`,
                     contractAddress,
-                    amount,
+                    amount: parsedAmount,
+                    erc20PaymentAddress,
                 });
             }
         } catch {

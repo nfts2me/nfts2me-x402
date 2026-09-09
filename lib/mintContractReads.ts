@@ -2,13 +2,9 @@ import { createPublicClient } from "viem";
 import {
     USDC_ADDRESSES,
     WETH_USDC_POOLS,
-    ZERO_ADDRESS,
     MULTICALL3_ADDRESSES,
     FORWARDER_CONTRACT_ADDRESSES,
 } from "./networks";
-
-export { ZERO_ADDRESS };
-
 
 export const ABI_CHECKS = [
     { inputs: [], name: "protocolFee", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
