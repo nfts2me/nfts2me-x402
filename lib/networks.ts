@@ -1,16 +1,26 @@
 import { Chain, zeroAddress } from "viem";
-import { base, baseSepolia, polygon } from "viem/chains";
+import { arc, base, baseSepolia, polygon, robinhood } from "viem/chains";
+
+export { arc, robinhood };
 
 export const USDC_ADDRESSES: Record<number, `0x${string}`> = {
     137: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", // Polygon Mainnet
     8453: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // Base
     84532: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", // Base Sepolia
+    // Arc native USDC ERC-20 interface (6 decimals). Same address on testnet.
+    5042: "0x3600000000000000000000000000000000000000",
+};
+
+/** Robinhood Chain has no Circle USDC. Settlement asset is Paxos USDG (6 decimals). */
+export const USDG_ADDRESSES: Record<number, `0x${string}`> = {
+    4663: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
 };
 
 export const FORWARDER_CONTRACT_ADDRESSES: Record<number, `0x${string}`> = {
     137: "0x52f17BEdBb1BC243000524a4622F5D621A75c713", // Polygon Mainnet
     8453: "0x5F5a6890000d932B4a8cec5b408F26339A84437C", // Base mainnet
     84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" // BaseSepolia
+    // Arc (5042) and Robinhood (4663): add the deployed forwarder before enabling the chain.
 };
 
 export const TESTNET_CHAIN_IDS = ["84532", "11155111", "80002"];
@@ -19,6 +29,9 @@ export const SUPPORTED_CHAINS: Record<string, Chain> = {
     "137": polygon,
     "8453": base,
     "84532": baseSepolia,
+    // Not enabled yet: missing forwarder + x402 facilitator (and Robinhood needs Permit2, not EIP-3009).
+    // "5042": arc,
+    // "4663": robinhood,
 };
 
 // Coger las pools de aquí. https://app.uniswap.org/explore/pools/base
@@ -54,12 +67,20 @@ export const RPC_URLS: Record<number, string[]> = {
         "https://base-sepolia-rpc.publicnode.com",
         "https://base-sepolia.gateway.tenderly.co",
     ],
+    5042: [
+        "https://rpc.blockdaemon.mainnet.arc.io",
+        "https://rpc.drpc.mainnet.arc.io",
+        "https://rpc.quicknode.mainnet.arc.io",
+    ],
+    4663: ["https://rpc.ordofi.network"],
 };
 
 export const MULTICALL3_ADDRESSES: Record<number, readonly `0x${string}`[]> = {
     137: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Polygon Mainnet
     8453: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Base mainnet
     84532: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Base Sepolia
+    5042: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Arc Mainnet
+    4663: ["0xcA11bde05977b3631167028862bE2a173976CA11"], // Robinhood Chain
 };
 
 export function isTestnet(chainId: string | number): boolean {

@@ -6,4 +6,5 @@ allowBuilds:
   unrs-resolver: false
   utf-8-validate: false
 minimumReleaseAgeExclude:
-  - viem@2.52.0
+  - viem@2.52.0 || 2.56.7
+  - ox@0.14.45

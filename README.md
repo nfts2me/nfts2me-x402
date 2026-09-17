@@ -1,157 +1,207 @@
-# NFTs2Me x402 Mint Gateway (WIP)
+# NFTs2Me x402 Mint Gateway
 
-Proyecto Next.js para habilitar pagos x402 en el flujo de minteo de colecciones de NFTs2Me.
+Gateway Next.js para mintear colecciones de [NFTs2Me](https://nfts2me.com) cobrando con [x402](https://www.x402.org): el cliente paga en USDC (autorización EIP-3009) y el servidor mintea on-chain de forma atómica.
 
-## Objetivo final
+Documentación relacionada:
 
-El objetivo final de este repositorio es permitir que cualquier colección de NFTs2Me pueda exponer un endpoint de minteo protegido por x402, donde:
-
-1. El precio se obtiene dinámicamente del smart contract de la colección (`mintFee`).
-2. El pago se valida en USDC en la red correspondiente (Base o Base Sepolia).
-3. El minteo se ejecuta de forma segura tras validación del pago.
-4. El paywall se personaliza automáticamente con metadatos de la colección (logo y nombre) obtenidos desde Supabase.
-5. Existan dos modos operativos:
-	- settlement estándar con `withX402`.
-	- verify-only con `withX402VerifyOnly` para settlement atómico on-chain con `transferWithAuthorization`.
+- [Facilitadores x402 y nuevas redes](docs/facilitators.md) — cobertura actual, cómo comprobarla y checklist para añadir una cadena.
+- [PENDIENTES.MD](PENDIENTES.MD) — trabajo abierto (Permit2, reembolsos, etc.).
 
 ## Estado actual
 
-Estado: **Work in Progress**.
+El camino de producción es **`GET /x402mint/[chainId]/[contractAddress]/[amount]`**.
 
-Lo que ya está implementado:
+Qué hace hoy:
 
-1. Integración base de x402 en Next.js con `paymentProxy` y `x402ResourceServer`.
-2. Endpoint dinámico de minteo con settlement estándar:
-	- `GET /api/mint/[chainId]/[contractAddress]/[amount]`
-3. Endpoint dinámico verify-only (sin settle automático):
-	- `GET /x402mint/[chainId]/[contractAddress]/[amount]`
-4. Validaciones on-chain básicas:
-	- `protocolFee === 0`
-	- `erc20PaymentAddress` coincide con USDC de la red
-5. Construcción dinámica del paywall según chainId y metadatos de Supabase.
-6. Wrapper propio `withX402VerifyOnly` en `lib/withX402VerifyOnly.ts`.
+1. Precio dinámico desde el contrato (`mintFee` / `mintPrice` v1, `protocolFee`, token de pago).
+2. Paywall x402 personalizado con nombre y logo de la colección (Supabase `MintingPages`).
+3. Verificación del pago con un facilitador (`POST /verify` **sin** `/settle`).
+4. Mint atómico en el **forwarder** (`mintWithAuthorization*`: cobra USDC con `transferWithAuthorization` y mintea en la misma TX).
+5. Metadata [Bazaar](https://docs.x402.org/extensions/bazaar.md) por colección (no un único endpoint global).
+6. Alertas Telegram si falla el mint o si el gas nativo de la wallet de settlement está bajo (cron diario).
 
-Limitaciones y pendientes actuales:
+Redes **activas** (`SUPPORTED_CHAINS`): Polygon `137`, Base `8453`, Base Sepolia `84532`.
 
-1. La UI `app/mint/page.tsx` invoca `POST /api/mint`, pero el endpoint implementado es dinámico por ruta y con método `GET`. Esta página es demostrativa y no está alineada aún con la API real.
-2. `app/premium/page.tsx` existe para demo del paywall, pero no representa todavía el flujo final de minteo en producción.
-3. Metadata global (title/description) y home siguen en modo ejemplo.
-4. Hay logging de depuración en rutas API que debe ajustarse antes de producción.
+Redes **preparadas pero no activas**: Arc `5042` y Robinhood Chain `4663` (definiciones, USDC/USDG, Multicall3, RPCs). Falta forwarder, facilitador adecuado y, en Robinhood, Permit2. Detalle en [docs/facilitators.md](docs/facilitators.md).
 
-## Arquitectura (resumen)
+Esto **no** es todavía el gateway final de producción (reembolsos, Permit2, tests de integración, UI propia). El endpoint de mint sí se usa.
 
-1. `app/api/mint/.../route.ts` (`Protecting API Routes. Vía https://github.com/x402-foundation/x402/tree/main/typescript/packages/http/next#protecting-api-routes`)
-	- Usa `withX402`.
-	- Calcula precio dinámico leyendo `mintFee` del contrato.
-	- Ejecuta aprobación (si aplica) y `mintTo` con wallet del servidor.
-2. `app/x402mint/.../route.ts`
-	- Usa `withX402VerifyOnly`.
-	- Verifica pago y devuelve autorización EIP-3009 para settle atómico on-chain.
-3. `lib/supabase.ts`
-	- Obtiene `ipfs_logo` y `name` de `MintingPages`.
-	- Cachea respuesta 24h con `unstable_cache`.
-4. `proxy.ts` (Para proteger Page routes. Vía https://github.com/coinbase/x402/tree/main/typescript/packages/http/next#x402next . Realmente es una prueba de concepto, pero no nos resulta útil para nosotros usar el 'paymentProxy', porque no queremos proteger una página). El pago puede que llegue en el mismo bloque por la preconfirmación, o en el siguiente. WARNING!!
-	- Inicializa `x402ResourceServer` y esquema EVM exact.
-	- Configura `paymentProxy` para rutas protegidas de ejemplo.
+## Flujo de pago (producción)
 
+```
+Cliente GET /x402mint/<chain>/<collection>/<amount>
+        │
+        ├─ sin PAYMENT-SIGNATURE → 402 + paywall / requisitos x402
+        │
+        └─ con firma EIP-3009
+              → facilitador POST /verify
+              → forwarder.mintWithAuthorization*(…)  ← nosotros enviamos la TX
+              → 200 { mintTxHash, etherscanTxUrl, … }
+```
 
-## Requisitos
+El `payTo` de x402 es la dirección del **forwarder**, no una EOA de cobro suelta. Así el USDC y el mint van juntos y, si el mint revierte, el cobro también.
 
-1. Node.js 18+.
-2. npm/pnpm/yarn.
-3. Variables de entorno configuradas (wallet, claves x402/supabase, etc.).
-4. Acceso RPC de la red objetivo.
+Casos on-chain que implementa el handler:
+
+| Token de la colección | Protocol fee | Función del forwarder |
+| --- | --- | --- |
+| USDC | 0 | `mintWithAuthorization` |
+| USDC | > 0 | `mintWithAuthorizationUSDCWithNativeProtocolFee` (pool WETH/USDC) |
+| Nativo (`address(0)`) | 0 o > 0 | `mintWithAuthorizationNative` (el cliente paga USDC; el forwarder cubre el nativo vía pool) |
+
+Otros ERC-20 → `400`. Permit2 no está implementado.
+
+Comisión extra opcional sobre el precio x402: `COMMISSION_ENABLED` (default on), `COMMISSION_AMOUNT` (default `10000` = 0.01 USDC a 6 decimales).
+
+## Endpoints
+
+### `GET /x402mint/[chainId]/[contractAddress]/[amount]`
+
+Ruta viva. `amount` = entero 1–999999 (número de NFTs).
+
+- Sin pago: `402` + paywall HTML / headers x402.
+- Pago válido: verifica, mintea, `200` JSON (`success`, `mintParams`, `mintTxHash`, `etherscanTxUrl`). En development también devuelve `authorization`.
+- `chainId` no soportado: `400` con `supportedChainIds`.
+
+Ejemplos locales:
+
+- http://localhost:3000/x402mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
+- `http://localhost:3000/x402mint/8453/<collection>/1`
+
+### `GET /api/mint/[chainId]/[contractAddress]/[amount]`
+
+**No está activo** (código comentado). Era el flujo `withX402` clásico: mint primero (`mintTo`) y `/settle` después. El cobro puede confirmar en el mismo bloque o en el siguiente; no es atómico. No usar.
+
+### `GET /api/cron/native-balance`
+
+Comprueba el saldo nativo de la wallet de settlement en cada red de `SUPPORTED_CHAINS` y avisa por Telegram si está por debajo de `NATIVE_BALANCE_DAILY_THRESHOLD_USD` (default `$1`). En Vercel corre a las 06:00 y 07:00 UTC; el handler solo actúa a las 08:00 Europe/Madrid (salvo `?force=1`). Auth: `Authorization: Bearer $CRON_SECRET` (en development no se exige).
+
+### Páginas
+
+| Ruta | Rol |
+| --- | --- |
+| `/` | Home mínima. |
+| `/premium` | Demo del `paymentProxy` (paywall de página, Base Sepolia $0.01). No es el flujo de mint. |
+| `/mint` | Stub vacío; la UI antigua está comentada y apuntaba a un `POST /api/mint` que no existe. |
+
+## Arquitectura
+
+| Pieza | Qué hace |
+| --- | --- |
+| `app/x402mint/.../route.ts` | Gateway: precio, paywall, verify, mint en el forwarder. |
+| `lib/withX402VerifyOnly.ts` | Wrapper propio: verifica x402 y **no** llama `/settle`; pasa la autorización EIP-3009 al handler. |
+| `lib/networks.ts` | Cadenas, USDC/USDG, forwarder, pools, RPC, Multicall3. |
+| `lib/mintContractReads.ts` | Multicall: `protocolFee`, `erc20PaymentAddress`, `mintFee`/`mintPrice`, quote USDC por 1 nativo. |
+| `lib/rpc.ts` | Transporte con fallback de RPCs; errores on-chain → mensaje de usuario + header `x-x402-error` (el paywall no lee el body JSON). |
+| `lib/supabase.ts` | `ipfs_logo` y `name` de `MintingPages` (cache ~24 h). Falla el boot si faltan las env de Supabase. |
+| `lib/nativeFundsGuard.ts` + `lib/telegram.ts` | Alertas de mint fallido (dedup) y saldo nativo bajo. |
+| `proxy.ts` | PoC `paymentProxy` para `/premium`. **No** protege el mint. Facilitador default de testnet si no hay `FACILITATOR_URL`. |
+
+Stack: Next.js 16 App Router, `@x402/*` v2, viem, pnpm.
+
+## Facilitadores (resumen)
+
+Detalle, `/supported`, alternativas y checklist de redes nuevas: **[docs/facilitators.md](docs/facilitators.md)**.
+
+| | Testnet | Mainnet |
+| --- | --- | --- |
+| Env | `TESTNET_FACILITATOR_URL` | `FACILITATOR_URL` |
+| Default | `https://x402.org/facilitator` | `https://facilitator.payai.network` |
+
+PayAI cubre las mainnets **activas** (Base, Polygon). No cubre Arc ni Robinhood. En este proyecto el facilitador **solo verifica**; la TX la enviamos nosotros.
+
+## Redes
+
+| Chain ID | Red | Mint | Facilitador default | Token x402 |
+| --- | --- | --- | --- | --- |
+| 8453 | Base | Activo | PayAI | USDC `0x833589fC…` |
+| 137 | Polygon | Activo | PayAI | USDC `0x3c499c54…` |
+| 84532 | Base Sepolia | Activo | x402.org | USDC testnet `0x036CbD53…` |
+| 5042 | Arc | No (datos parciales) | No hay PayAI / Dexter `exact` | USDC nativo EIP-3009 |
+| 4663 | Robinhood | No (datos parciales) | Dexter/Primer/Solvador vía Permit2 | USDG (no USDC, no EIP-3009) |
+
+`isTestnet` mira `84532`, `11155111`, `80002`. Un `chainId` desconocido no hace fallback a otra red.
+
+Forwarders activos: Polygon `0x52f17BEd…`, Base `0x5F5a6890…`, Base Sepolia `0xDD164E8A…`.
 
 ## Variables de entorno
 
-Variables esperadas por el proyecto (segun código actual):
+No commitear secretos.
 
- 1. `WALLET_ADDRESS`
- 2. `PAY_TO_EVM_ADDRESS`
- 3. `PRIVATE_KEY`
- 4. `APP_NAME`
- 5. `APP_LOGO`
- 6. `NEXT_PUBLIC_SUPABASE_URL`
- 7. `SUPABASE_SERVICE_KEY`
- 8. `FACILITATOR_URL` (Opcional, URL de producción del facilitador x402)
- 
- Notas:
- 
- 1. `lib/supabase.ts` lanza error al iniciar si faltan `NEXT_PUBLIC_SUPABASE_URL` o `SUPABASE_SERVICE_KEY`.
- 2. No se deben commitear secretos reales en el repositorio.
+**Obligatorias para mint**
+
+| Variable | Uso |
+| --- | --- |
+| `PRIVATE_KEY` | Wallet que paga gas y llama al forwarder. |
+| `NEXT_PUBLIC_SUPABASE_URL` | Cliente Supabase. |
+| `SUPABASE_SERVICE_KEY` | Lectura de `MintingPages`. |
+
+**Facilitador**
+
+| Variable | Uso |
+| --- | --- |
+| `FACILITATOR_URL` | Mainnet. Default PayAI. |
+| `TESTNET_FACILITATOR_URL` | Testnet. Default x402.org. |
+
+**Paywall / branding**
+
+| Variable | Uso |
+| --- | --- |
+| `APP_NAME` | Fallback si no hay nombre de colección. |
+| `APP_LOGO` | Fallback de logo. |
+
+**Comisión x402**
+
+| Variable | Default |
+| --- | --- |
+| `COMMISSION_ENABLED` | `true` |
+| `COMMISSION_AMOUNT` | `10000` (0.01 USDC) |
+| `COMMISSION_DECIMALS` | `6` |
+
+**Alertas y cron**
+
+| Variable | Uso |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Bot. Si falta, se omite el aviso. |
+| `TELEGRAM_CHAT_ID` | Chat/canal. |
+| `TELEGRAM_THREAD_ID` | Hilo opcional. |
+| `PAY_TO_EVM_ADDRESS` | Fallback de dirección de settlement si no hay `PRIVATE_KEY` (alertas de saldo). |
+| `NATIVE_BALANCE_DAILY_THRESHOLD_USD` | Umbral de alerta de gas (default `1`). |
+| `MINT_ERROR_ALERT_SUPPRESS_MS` | Dedup de errores iguales (default 15 min). |
+| `CRON_SECRET` | Bearer del cron en producción. |
+
+**Demo `/premium` (proxy)**
+
+| Variable | Uso |
+| --- | --- |
+| `PAY_TO_EVM_ADDRESS` | `payTo` del paywall de página. |
+
+CDP (comentado, no activo): `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET`.
 
 ## Desarrollo local
 
-Instalación:
+Node.js 18+, pnpm 12.
 
 ```bash
 pnpm install
-```
-
-Ejecución:
-
-```bash
 pnpm run dev
-```
-
-Lint:
-
-```bash
 pnpm run lint
 ```
 
-## Endpoints disponibles
+Hace falta `.env.local` con al menos `PRIVATE_KEY` y las claves de Supabase, más USDC de testnet / gas en Base Sepolia para un mint real.
 
-1. `GET /api/mint/[chainId]/[contractAddress]/[amount]`
-	- Verifica y liquida pago x402 (flujo estándar).
-	- Realiza mint vía `mintTo`.
-2. `GET /x402mint/[chainId]/[contractAddress]/[amount]`
-	- Verifica pago x402 sin settle.
-	- Devuelve autorización EIP-3009 para settle atómico on-chain.
+## Limitaciones y pendientes
 
-### Endpoints ejemplo DEV
+1. **Permit2** (y tokens sin EIP-3009, p.ej. USDG en Robinhood): no implementado.
+2. **Reembolso si el mint revierte después de un cobro**: en el flujo actual el cobro va en la misma TX que el mint, así que un revert no deja el USDC cobrado. Sigue siendo un riesgo si se reactivara `/api/mint` (`settle` después del mint) o un path no atómico.
+3. **`/api/mint`** comentado; no alineado con el gateway.
+4. **UI** `/mint` y `/premium` son demo o stub; el producto es el endpoint + paywall x402.
+5. **Arc / Robinhood** no están en `SUPPORTED_CHAINS`.
+6. Sin tests de integración automatizados de `/x402mint`.
+7. `proxy.ts` no debe tomarse como configuración de producción del mint.
 
-- http://localhost:3000/api/mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
-- http://localhost:3000/x402mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
+## Convenciones
 
-## Redes soportadas (implementación actual)
-
-1. Base mainnet (`chainId 8453`).
-2. Base Sepolia (`chainId 84532`).
-
-Si se envía un `chainId` no soportado, la API responde `400` y no aplica fallback automático a otra red.
-
-La detección de testnet para el paywall se basa en:
-
-1. `84532`
-2. `11155111`
-3. `80002`
-
-## Checklist para producción
-
-1. Alinear UI de minteo con endpoints reales (método y path).
-2. Revisar seguridad de secretos y rotación de claves.
-3. Eliminar logs sensibles/de depuración.
-4. Definir estrategia final entre `withX402` y `withX402VerifyOnly` por caso de uso.
-5. Añadir tests de integración para rutas `/api/mint` y `/x402mint`.
-
-## Política de mantenimiento del README
-
-Regla obligatoria del proyecto:
-
-**Cada cambio de funcionalidad, endpoint, flujo de pago, variable de entorno o comportamiento del sistema debe venir acompañado de una actualización del README en el mismo PR/commit.**
-
-Si el README queda desactualizado, el cambio se considera incompleto.
-
-## Estado del proyecto
-
-Este repositorio está en fase activa de construcción y validación.
-
-No debe considerarse todavía una integración final de producción, pero sí una base funcional para evolucionar al gateway oficial de minteo x402 de NFTs2Me.
-
-
-## IMPORTANTE
-
-Todo el código que genere texto que se pueda leer desde el exterior (logs, respuestas API, etc.) debe estar en inglés, para mantener consistencia y facilitar futuras integraciones internacionales.
-
-Los comentarios y cosas internas se deben hacer en español.
+- Texto visible fuera (API, paywall, logs de usuario, Telegram): **inglés**.
+- Comentarios y docs internas (este README, `docs/`): **español**.
+- Cada cambio de flujo, endpoint, env o comportamiento debe actualizar este README (y [docs/facilitators.md](docs/facilitators.md) si toca redes o facilitadores) en el mismo PR.
