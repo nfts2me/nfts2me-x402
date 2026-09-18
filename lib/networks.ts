@@ -1,7 +1,18 @@
 import { Chain, zeroAddress } from "viem";
-import { arc, base, baseSepolia, polygon, robinhood } from "viem/chains";
+import { arc as viemArc, base, baseSepolia, polygon, robinhood } from "viem/chains";
 
-export { arc, robinhood };
+/** viem still points Arc at explorer.arc.io; Etherscan is the canonical explorer. */
+export const arc: Chain = {
+    ...viemArc,
+    blockExplorers: {
+        default: {
+            name: "Etherscan",
+            url: "https://arc.etherscan.io",
+        },
+    },
+};
+
+export { robinhood };
 
 export const USDC_ADDRESSES: Record<number, `0x${string}`> = {
     137: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", // Polygon Mainnet

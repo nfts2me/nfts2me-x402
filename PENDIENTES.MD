@@ -7,18 +7,16 @@ El camino de producción es `GET /x402mint/...`: verify-only + mint atómico en 
 - Paywall x402 + metadata Bazaar por colección.
 - `protocolFee !== 0` en Base/Polygon (swap nativo vía pool WETH/USDC).
 - Facilitador propio verify-only interno (in-process, sin HTTP). Usado en Arc.
-- Arc `5042` en `SUPPORTED_CHAINS` (sin pool; quote 1:1). Path nativo: `mintWithAuthorizationNativeUSDC`. Falta pegar el forwarder desplegado.
+- Arc `5042` en `SUPPORTED_CHAINS` (sin pool; quote 1:1). Path nativo: `mintWithAuthorizationNativeUSDC`. Forwarder `0x5F982E55…` pegado. Paywall: el bundle de `@x402/paywall` no trae Arc mainnet; se inyectan `SUPPORTED_CHAINS` en el HTML 402.
 
 `/api/mint` (settle después del mint) está comentado a propósito: no es atómico. No reactivar.
 
 ## Ahora (Arc)
 
-1. Desplegar `N2MMintmasterX402Arc` en Arc (`./nfts2me-contracts/contracts/N2MMintmasterX402Arc.sol`).
-2. Pegar la dirección en `FORWARDER_CONTRACT_ADDRESSES[5042]`.
-3. Cargar la wallet de `PRIVATE_KEY` con USDC nativo (gas).
-4. Probar `GET /x402mint/5042/<colección>/1` sin pago (`402`) y con pago (colección **nativa**, típica en Arc).
+Forwarder desplegado y en `FORWARDER_CONTRACT_ADDRESSES[5042]`. Queda:
 
-Hasta el paso 2 la ruta responde `400`. Soportado: nativo + protocol fee, o ERC-20 USDC con `protocolFee === 0`.
+1. Cargar la wallet de `PRIVATE_KEY` con USDC nativo (gas) si aún no está.
+2. Probar `GET /x402mint/5042/<colección>/1` con pago real (colección **nativa**, típica en Arc) y desplegar el parche del paywall a producción.
 
 ## Después
 

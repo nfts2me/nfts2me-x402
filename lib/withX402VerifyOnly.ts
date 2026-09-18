@@ -137,10 +137,14 @@ export function withX402VerifyOnly<T = unknown>(
 
         // Create HTTP context using proper structure
         const url = new URL(request.url);
+        // Chrome (COOP) y algunos crawlers mandan HEAD. El patrón x402 es
+        // `GET /x402mint/...`; sin reescribir el método, processHTTPRequest
+        // no empareja y devolvía 500 no-payment-required.
+        const isHead = request.method === "HEAD";
         const context = {
             adapter,
             path: url.pathname,
-            method: request.method,
+            method: isHead ? "GET" : request.method,
             paymentHeader: request.headers.get("PAYMENT-SIGNATURE") ?? request.headers.get("X-PAYMENT") ?? undefined,
         };
 
@@ -149,7 +153,15 @@ export function withX402VerifyOnly<T = unknown>(
         const contractAddress = alertExtras?.contractAddress ?? pathInfo.contractAddress;
         const amount = alertExtras?.amount ?? pathInfo.amount;
         const erc20PaymentAddress = alertExtras?.erc20PaymentAddress;
-        const skipAlert = request.method === "HEAD";
+        const skipAlert = isHead;
+
+        const headersOnly = (response: NextResponse<T>): NextResponse<T> => {
+            if (!isHead) return response;
+            return new NextResponse(null, {
+                status: response.status,
+                headers: response.headers,
+            }) as NextResponse<T>;
+        };
 
         const alertBase = {
             chainId,
@@ -177,16 +189,16 @@ export function withX402VerifyOnly<T = unknown>(
                 const responseHeaders = new Headers(headers);
 
                 if (isHtml) {
-                    return new NextResponse(injectPaywallErrorFetchPatch(body as string), {
+                    return headersOnly(new NextResponse(injectPaywallErrorFetchPatch(body as string), {
                         status,
                         headers: responseHeaders,
-                    }) as NextResponse<T>;
+                    }) as NextResponse<T>);
                 }
 
-                return NextResponse.json(body, {
+                return headersOnly(NextResponse.json(body, {
                     status,
                     headers: responseHeaders,
-                }) as NextResponse<T>;
+                }) as NextResponse<T>);
             }
 
             if (result.type === "no-payment-required") {
@@ -198,10 +210,10 @@ export function withX402VerifyOnly<T = unknown>(
                         httpStatus: 500,
                     });
                 }
-                return NextResponse.json(
+                return headersOnly(NextResponse.json(
                     { error: "Payment configuration error" },
                     { status: 500 }
-                ) as NextResponse<T>;
+                ) as NextResponse<T>);
             }
 
             // Payment verified! Extract authorization data
@@ -214,10 +226,10 @@ export function withX402VerifyOnly<T = unknown>(
             };
 
             if (!payload.authorization || !payload.signature) {
-                return NextResponse.json(
+                return headersOnly(NextResponse.json(
                     { error: "Invalid payment payload: missing authorization data" },
                     { status: 400 }
-                ) as NextResponse<T>;
+                ) as NextResponse<T>);
             }
 
             verifyContext = {
@@ -240,10 +252,15 @@ export function withX402VerifyOnly<T = unknown>(
                     httpStatus: 500,
                 });
             }
-            return NextResponse.json(
+            return headersOnly(NextResponse.json(
                 { error: details, details },
                 mintErrorResponseInit(details),
-            ) as NextResponse<T>;
+            ) as NextResponse<T>);
+        }
+
+        // HEAD no debe mintear aunque lleve PAYMENT-SIGNATURE.
+        if (isHead) {
+            return new NextResponse(null, { status: 200 }) as NextResponse<T>;
         }
 
         // Call the handler with verification context

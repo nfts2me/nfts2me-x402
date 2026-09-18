@@ -1,5 +1,5 @@
 import { BaseError, ContractFunctionRevertedError, fallback, http } from "viem";
-import { RPC_URLS } from "./networks";
+import { RPC_URLS, SUPPORTED_CHAINS } from "./networks";
 
 /**
  * Crea un transporte viem con fallback: RPC por defecto de la cadena + URLs alternativas.
@@ -153,6 +153,54 @@ const PAYWALL_ERROR_FETCH_PATCH = `<script data-x402-error-fetch-patch="1">
 })();
 </script>`;
 
+const PAYWALL_CRASH_OVERLAY = `<script data-x402-crash-overlay="1">
+(() => {
+  let shown = false;
+  function show(message) {
+    if (shown) return;
+    shown = true;
+    const safe = String(message || "Unexpected error").replace(/[<>&]/g, (c) =>
+      c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;"
+    );
+    const el = document.createElement("div");
+    el.id = "n2m-paywall-crash";
+    el.setAttribute("role", "alert");
+    el.style.cssText = "font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:1.5rem;color:#111;background:#fff;line-height:1.45";
+    el.innerHTML = "<h1 style=\\"font-size:1.25rem;margin:0 0 .75rem\\">Could not load the payment page</h1>"
+      + "<p style=\\"margin:0 0 .75rem\\">" + safe + "</p>"
+      + "<p style=\\"margin:0;color:#555\\">If this keeps happening, contact x402support@nfts2me.com with this URL.</p>";
+    (document.body || document.documentElement).prepend(el);
+  }
+  window.addEventListener("error", (e) => {
+    const msg = String(e.message || (e.error && e.error.message) || "");
+    if (/Unsupported chain ID/i.test(msg)) show(msg);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const reason = e.reason;
+    const msg = String(reason && reason.message ? reason.message : reason || "");
+    if (/Unsupported chain ID/i.test(msg)) show(msg);
+  });
+})();
+</script>`;
+
+function paywallExtraChainsScript(): string {
+    const chains = Object.values(SUPPORTED_CHAINS).map((chain) => ({
+        id: chain.id,
+        name: chain.name,
+        nativeCurrency: chain.nativeCurrency,
+        rpcUrls: chain.rpcUrls,
+        blockExplorers: chain.blockExplorers,
+        contracts: chain.contracts,
+        testnet: chain.testnet,
+    }));
+    const json = JSON.stringify(chains).replace(/</g, "\\u003c");
+    return `<script data-x402-extra-chains="1">window.__x402ExtraChains=${json};</script>`;
+}
+
+function paywallHeadScripts(): string {
+    return `${paywallExtraChainsScript()}${PAYWALL_ERROR_FETCH_PATCH}${PAYWALL_CRASH_OVERLAY}`;
+}
+
 export function injectPaywallErrorFetchPatch(html: string): string {
     let patched = html;
 
@@ -170,10 +218,20 @@ export function injectPaywallErrorFetchPatch(html: string): string {
         "let[Z,z]=await Promise.all([iJ(P,r,ie),$ze(P,ie)]);Z!=null&&M(y1(Z,z))",
     );
 
+    // @x402/paywall 2.26.0 embebe viem/chains con Arc Testnet (5042002) pero no
+    // Arc mainnet (5042). El lookup `Object.values(ay).find(id)` lanza y deja
+    // #root vacío. Concatenamos SUPPORTED_CHAINS inyectadas en window.
+    // El identificador minificado `ay` es frágil; el overlay cubre si cambia.
+    patched = patched.replaceAll(
+        "Object.values(ay).find(",
+        "Object.values(ay).concat(window.__x402ExtraChains||[]).find(",
+    );
+
     if (patched.includes("data-x402-error-fetch-patch")) return patched;
+    const scripts = paywallHeadScripts();
     const headClose = /<\/head>/i;
     if (headClose.test(patched)) {
-        return patched.replace(headClose, `${PAYWALL_ERROR_FETCH_PATCH}$&`);
+        return patched.replace(headClose, `${scripts}$&`);
     }
-    return `${PAYWALL_ERROR_FETCH_PATCH}${patched}`;
+    return `${scripts}${patched}`;
 }

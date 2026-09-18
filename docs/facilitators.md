@@ -153,7 +153,9 @@ Cómo localizar el pool: comentarios en `lib/networks.ts` (factory Uniswap V3 `g
 
 **Forwarder en Arc:** sí hace falta (`N2MMintmasterX402Arc`, no el forwarder con pool). El nativo = USDC no lo sustituye. El `payTo` de x402 es el forwarder; el cobro es EIP-3009 sobre el ERC-20 (6 decimales). En colecciones nativas (el caso típico) `mintWithAuthorizationNativeUSDC` reenvía mint + protocol fee como `msg.value` (18 decimales) **sin** swap. ERC-20 USDC + `protocolFee === 0` usa `mintWithAuthorization`. ERC-20 USDC + protocol fee nativo no está soportado.
 
-Hasta que no esté `FORWARDER_CONTRACT_ADDRESSES[5042]`, `/x402mint/5042/...` responde `400` (forwarder no configurado).
+Forwarder Arc: `FORWARDER_CONTRACT_ADDRESSES[5042]` (`N2MMintmasterX402Arc`).
+
+El paywall de `@x402/paywall` embebe su propio `viem/chains`. Si una red de `SUPPORTED_CHAINS` no está en ese bundle (hoy: Arc mainnet `5042`), `injectPaywallErrorFetchPatch` la inyecta en el HTML 402. Sin eso, el cliente lanza `Unsupported chain ID` y la página queda en blanco.
 
 ### 4. Operación
 
