@@ -16,21 +16,58 @@ export const USDG_ADDRESSES: Record<number, `0x${string}`> = {
     4663: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
 };
 
+// Lo desplegamos nosotros.
+// Base/Polygon/Sepolia: N2MMintmasterX402.sol
+// Arc (5042): N2MMintmasterX402Arc.sol (mintWithAuthorizationNativeUSDC; sin pool).
 export const FORWARDER_CONTRACT_ADDRESSES: Record<number, `0x${string}`> = {
     137: "0x52f17BEdBb1BC243000524a4622F5D621A75c713", // Polygon Mainnet
     8453: "0x5F5a6890000d932B4a8cec5b408F26339A84437C", // Base mainnet
-    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D" // BaseSepolia
-    // Arc (5042) and Robinhood (4663): add the deployed forwarder before enabling the chain.
+    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D", // BaseSepolia
+    5042: "0x5F982E5590173e756B481508841998A0bE56138F", // Arc (5042) N2MMintmasterX402Arc
 };
 
 export const TESTNET_CHAIN_IDS = ["84532", "11155111", "80002"];
+
+/** Native gas is USDC (18 decimals); ERC-20 USDC (6 decimals) is the same asset. */
+export const NATIVE_USDC_CHAIN_IDS = new Set([5042]);
+
+export function isNativeUsdcChain(chainId: string | number): boolean {
+    return NATIVE_USDC_CHAIN_IDS.has(Number(chainId));
+}
+
+/** 1 native unit (1e18) = 1 USDC = 1e6 ERC-20 units. */
+export const NATIVE_USDC_QUOTE_FOR_ONE = 10n ** 6n;
+
+/** Native USDC (18 decimals) → ERC-20 USDC (6 decimals). Ceiling so the forwarder check cannot fail. */
+export const NATIVE_TO_ERC20_USDC_SCALE = 10n ** 12n;
+
+export function nativeUsdcToErc20Amount(nativeAmount: bigint): bigint {
+    if (nativeAmount === 0n) return 0n;
+    return (nativeAmount + NATIVE_TO_ERC20_USDC_SCALE - 1n) / NATIVE_TO_ERC20_USDC_SCALE;
+}
+
+export const USDC_EIP712: Record<number, { name: string; version: string }> = {
+    5042: { name: "USDC", version: "2" },
+};
+
+/**
+ * Redes que verifica nuestro facilitador interno (in-process, sin HTTP), no PayAI.
+ * Añadir aquí una chain de SUPPORTED_CHAINS basta para cubrirla.
+ */
+export const SELF_FACILITATOR_CHAINS: Record<string, Chain> = {
+    "5042": arc,
+};
+
+export function usesSelfFacilitator(chainId: string | number): boolean {
+    return String(chainId) in SELF_FACILITATOR_CHAINS;
+}
 
 export const SUPPORTED_CHAINS: Record<string, Chain> = {
     "137": polygon,
     "8453": base,
     "84532": baseSepolia,
-    // Not enabled yet: missing forwarder + x402 facilitator (and Robinhood needs Permit2, not EIP-3009).
-    // "5042": arc,
+    "5042": arc,
+    // Robinhood needs Permit2 + USDG; not enabled.
     // "4663": robinhood,
 };
 

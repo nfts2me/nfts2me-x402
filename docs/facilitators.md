@@ -24,12 +24,27 @@ Implicaciones:
 
 En `app/x402mint/[chainId]/[contractAddress]/[amount]/route.ts`:
 
-| Entorno | Variable | Default |
-| --- | --- | --- |
-| Testnet (`isTestnet`) | `TESTNET_FACILITATOR_URL` | `https://x402.org/facilitator` |
-| Mainnet | `FACILITATOR_URL` | `https://facilitator.payai.network` |
+| Cadena | Facilitador |
+| --- | --- |
+| Base, Polygon (mainnet) | `FACILITATOR_URL` o PayAI |
+| Base Sepolia (testnet) | `TESTNET_FACILITATOR_URL` o x402.org |
+| Arc y las de `SELF_FACILITATOR_CHAINS` | Facilitador propio **interno** (in-process, sin HTTP) |
 
 `proxy.ts` (demo `/premium`) usa `FACILITATOR_URL` o, si falta, `https://x402.org/facilitator`. Ese default **no sirve en mainnet**.
+
+## Facilitador propio (verify-only, interno)
+
+PayAI no cubre Arc. Este repo incluye un `FacilitatorClient` in-process que **solo verifica** EIP-3009 contra RPC propio. **No hay rutas HTTP** (`/facilitator` no existe a propósito): no debe usarse como servicio público.
+
+No envía la TX. Si lo hiciera, gastaría el nonce de la autorización antes del mint. `settle` está abortado en el cliente (aunque `withX402VerifyOnly` no lo llama). El signer de verify es de solo lectura: `writeContract` / `sendTransaction` lanzan; no usa `PRIVATE_KEY`.
+
+Añadir otra red al facilitador:
+
+1. Tener la `Chain` en `lib/networks.ts` (RPC + Multicall3).
+2. Incluirla en `SELF_FACILITATOR_CHAINS`.
+3. Si el mint debe usarla, también en `SUPPORTED_CHAINS` y el resto del checklist.
+
+Código: `lib/facilitator/verifyOnlyFacilitator.ts`. El mint en Arc lo usa con `getVerifyOnlyFacilitatorClient()`.
 
 ## Dónde comprobar si un facilitador soporta una red
 
@@ -96,9 +111,9 @@ También:
 - Scheme distinto (`GatewayWalletBatched`). Liquidación en batch, no `transferWithAuthorization` al forwarder.
 - **No compatible** con el mint atómico actual. Sí cubre Arc a nivel Gateway, pero no es un drop-in de PayAI.
 
-### Verificar en local (self-facilitate)
+### Verificar en local / facilitador propio
 
-x402 permite registrar `eip155:*` y verificar EIP-3009 contra RPC propio, sin facilitador hosted. Encaja si no hay facilitador para esa red y nosotros ya enviamos la TX. Hay que implementar/conectar un `FacilitatorClient` local; hoy el código solo usa `HTTPFacilitatorClient`.
+Implementado: `SELF_FACILITATOR_CHAINS` + `getVerifyOnlyFacilitatorClient()` (in-process). Sin HTTP público. Circle Gateway no encaja.
 
 ## Qué necesita una red nueva (checklist)
 
@@ -116,9 +131,9 @@ Si el token **no** tiene EIP-3009 (USDG en Robinhood), hace falta otro path (Per
 
 - Que anuncie `eip155:<chainId>` + `exact` en `GET /supported`.
 - Preferible: sin alta, o al menos `/verify` gratis.
-- Si no existe: self-verify local, no Circle Gateway (salvo que se cambie el modelo de cobro).
+- Si no existe: añadir el `chainId` a `SELF_FACILITATOR_CHAINS` (facilitador propio). No Circle Gateway.
 
-Opcional más adelante: mapa `chainId → FACILITATOR_URL`. Hoy hay una URL de mainnet y otra de testnet para **todas** las cadenas.
+PayAI / x402.org cubren el resto. Las cadenas de `SELF_FACILITATOR_CHAINS` no usan `FACILITATOR_URL`.
 
 ### 3. Contratos y datos en `lib/networks.ts`
 
@@ -127,13 +142,18 @@ Opcional más adelante: mapa `chainId → FACILITATOR_URL`. Hoy hay una URL de m
 | Objeto `Chain` de viem | `SUPPORTED_CHAINS` | Sí (si no, `400 Unsupported chainId`) |
 | Forwarder NFTs2Me | `FORWARDER_CONTRACT_ADDRESSES` | Sí |
 | USDC (EIP-3009) | `USDC_ADDRESSES` | Sí (el mint actual asume USDC) |
-| Pool Uniswap V3 WETH/USDC | `WETH_USDC_POOLS` | Sí (quote de nativo↔USDC y protocol fee) |
+| Pool Uniswap V3 WETH/USDC | `WETH_USDC_POOLS` | Sí, **salvo** cadenas native-USDC (Arc): el quote es 1:1 (`NATIVE_USDC_QUOTE_FOR_ONE`) |
 | Multicall3 | `MULTICALL3_ADDRESSES` | Sí (lecturas del contrato) |
 | RPCs extra | `RPC_URLS` | Recomendado (fallback; el primario es el de viem) |
 | Testnet | `TESTNET_CHAIN_IDS` | Si es testnet (elige el facilitador de testnet y el paywall) |
-| CoinGecko nativo | `NATIVE_COINGECKO_ID_BY_CHAIN` en `lib/nativeFundsGuard.ts` | Para la alerta diaria de gas |
+| CoinGecko nativo | `NATIVE_COINGECKO_ID_BY_CHAIN` en `lib/nativeFundsGuard.ts` | Alerta diaria de gas. En Arc el nativo es USDC → precio 1, sin CoinGecko |
+| Facilitador propio | `SELF_FACILITATOR_CHAINS` | Si PayAI (u otro hosted) no cubre la red |
 
-Cómo localizar el pool: comentarios en `lib/networks.ts` (factory Uniswap V3 `getPool(WETH, USDC, fee)`). En Arc el gas **es** USDC (nativo 18 decimales vs ERC-20 6); el quote WETH/USDC no aplica igual.
+Cómo localizar el pool: comentarios en `lib/networks.ts` (factory Uniswap V3 `getPool(WETH, USDC, fee)`). En Arc el gas **es** USDC (nativo 18 decimales vs ERC-20 6); no hay pool. El quote es `1e18 nativo = 1e6 ERC-20 USDC`.
+
+**Forwarder en Arc:** sí hace falta (`N2MMintmasterX402Arc`, no el forwarder con pool). El nativo = USDC no lo sustituye. El `payTo` de x402 es el forwarder; el cobro es EIP-3009 sobre el ERC-20 (6 decimales). En colecciones nativas (el caso típico) `mintWithAuthorizationNativeUSDC` reenvía mint + protocol fee como `msg.value` (18 decimales) **sin** swap. ERC-20 USDC + `protocolFee === 0` usa `mintWithAuthorization`. ERC-20 USDC + protocol fee nativo no está soportado.
+
+Hasta que no esté `FORWARDER_CONTRACT_ADDRESSES[5042]`, `/x402mint/5042/...` responde `400` (forwarder no configurado).
 
 ### 4. Operación
 
@@ -144,7 +164,7 @@ Cómo localizar el pool: comentarios en `lib/networks.ts` (factory Uniswap V3 `g
 ### 5. Encender la red
 
 1. Rellenar tablas de `lib/networks.ts`.
-2. Confirmar facilitador (`GET /supported`).
+2. Confirmar facilitador (`GET /supported` de PayAI, o añadirla a `SELF_FACILITATOR_CHAINS`).
 3. Descomentar / añadir el `chainId` en `SUPPORTED_CHAINS`.
 4. Probar `GET /x402mint/<chainId>/<collection>/<amount>` sin pago (`402`) y con pago de prueba.
 
@@ -155,7 +175,7 @@ Cómo localizar el pool: comentarios en `lib/networks.ts` (factory Uniswap V3 `g
 | 8453 | Base | Sí | Sí (`eip155:8453`) | USDC EIP-3009 | Producción |
 | 137 | Polygon | Sí | Sí (`eip155:137`) | USDC EIP-3009 | Producción |
 | 84532 | Base Sepolia | Sí | N/A (testnet → x402.org) | USDC testnet | Desarrollo |
-| 5042 | Arc | No (preparada) | **No** | USDC nativo EIP-3009 (`0x3600…0000`) | Falta forwarder, pool/quote y facilitador `exact` hosted. Opción: verify local. Circle Gateway no encaja. |
+| 5042 | Arc | Sí (falta forwarder) | **No** (facilitador propio) | USDC EIP-3009 (`0x3600…0000`) | `N2MMintmasterX402Arc`. Sin pool. Caso típico: colección nativa → `mintWithAuthorizationNativeUSDC`. ERC-20 USDC + protocol fee nativo no soportado. |
 | 4663 | Robinhood Chain | No (preparada) | **No** | **USDG**, sin EIP-3009 | Dexter/Primer/Solvador sí la listan, vía **Permit2**. Falta forwarder y path Permit2 en el mint. No hay USDC Circle. |
 
 Direcciones ya anotadas (sin activar el mint):
@@ -172,4 +192,4 @@ Direcciones ya anotadas (sin activar el mint):
 3. Si pide auth (Solvador, CDP), hay que pasar headers en `HTTPFacilitatorClient` (`createAuthHeaders`). PayAI y Dexter no lo necesitan en el free/public path.
 4. No mezclar un facilitador de testnet en una ruta mainnet.
 
-No hace falta un facilitador distinto por cadena mientras todas las mainnets activas estén en PayAI. El día que se active Arc o Robinhood, o bien se verifica en local (Arc), o se enruta esa chainId a Dexter/Solvador **y** se implementa Permit2 (Robinhood).
+No hace falta un facilitador distinto por cadena mientras todas las mainnets activas estén en PayAI. Arc (y cualquier chain en `SELF_FACILITATOR_CHAINS`) usa el facilitador propio. Robinhood sigue pendiente de Permit2 + USDG.

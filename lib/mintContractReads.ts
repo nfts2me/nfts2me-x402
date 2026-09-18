@@ -4,6 +4,8 @@ import {
     WETH_USDC_POOLS,
     MULTICALL3_ADDRESSES,
     FORWARDER_CONTRACT_ADDRESSES,
+    isNativeUsdcChain,
+    NATIVE_USDC_QUOTE_FOR_ONE,
 } from "./networks";
 
 export const ABI_CHECKS = [
@@ -71,6 +73,11 @@ export function getWETHUSDCPoolAddress(chainId: number): `0x${string}` {
     return poolAddress;
 }
 
+export function getQuoteUsdcForOneNative(chainId: number): bigint | undefined {
+    if (isNativeUsdcChain(chainId)) return NATIVE_USDC_QUOTE_FOR_ONE;
+    return undefined;
+}
+
 export function validateMintPaymentConfiguration(chainId: number, protocolFee: bigint, erc20PaymentAddress: `0x${string}`) {
     const usdcAddress = getUsdcAddress(chainId);
 
@@ -92,9 +99,10 @@ export async function readMintContractDataWithMulticall(
 ) {
     console.log("Llamada a readMintContractDataWithMulticall con valores: ", { chainId, contractAddress, amount: amount.toString() });
     const multicallAddress = getMulticallAddress(chainId);
-    const poolAddress = getWETHUSDCPoolAddress(chainId);
+    const nativeUsdcQuote = getQuoteUsdcForOneNative(chainId);
+    const poolAddress = nativeUsdcQuote === undefined ? getWETHUSDCPoolAddress(chainId) : undefined;
     const forwarderAddress = FORWARDER_CONTRACT_ADDRESSES[chainId];
-    if (!forwarderAddress) {
+    if (!forwarderAddress && nativeUsdcQuote === undefined) {
         throw new Error(`Forwarder contract address not configured for chainId: ${chainId}`);
     }
 
@@ -109,7 +117,7 @@ export async function readMintContractDataWithMulticall(
         "type": "function"
     }] as const;
 
-    const results = await publicClient.multicall({
+    const collectionResults = await publicClient.multicall({
         multicallAddress,
         allowFailure: true,
         contracts: [
@@ -134,12 +142,6 @@ export async function readMintContractDataWithMulticall(
                 abi: ABI_CHECKS,
                 functionName: "mintPrice",
             },
-            {
-                address: forwarderAddress,
-                abi: quoteAbi,
-                functionName: "quoteUSDCForNative",
-                args: [poolAddress, 10n ** 18n], // Quote for 1 ETH (10^18 wei)
-            }
         ],
     });
 
@@ -148,8 +150,7 @@ export async function readMintContractDataWithMulticall(
         erc20PaymentAddressResult,
         mintFeeResult,
         mintPriceResult,
-        quoteForOneEthResult,
-    ] = results;
+    ] = collectionResults;
 
     // v1 contracts may not have protocolFee; treat a revert as 0
     const protocolFee = protocolFeeResult.status === "success" ? protocolFeeResult.result : 0n;
@@ -158,7 +159,18 @@ export async function readMintContractDataWithMulticall(
     if (erc20PaymentAddressResult.status !== "success") {
         throw new Error("Failed to read erc20PaymentAddress via multicall");
     }
-    if (quoteForOneEthResult.status !== "success") {
+
+    let quoteForOneEth: bigint;
+    if (nativeUsdcQuote !== undefined) {
+        quoteForOneEth = nativeUsdcQuote;
+    } else if (forwarderAddress && poolAddress) {
+        quoteForOneEth = await publicClient.readContract({
+            address: forwarderAddress,
+            abi: quoteAbi,
+            functionName: "quoteUSDCForNative",
+            args: [poolAddress, 10n ** 18n],
+        });
+    } else {
         throw new Error("Failed to read quoteUSDCForNative via multicall");
     }
 
@@ -166,7 +178,7 @@ export async function readMintContractDataWithMulticall(
         protocolFee,
         erc20PaymentAddress: erc20PaymentAddressResult.result,
         mintFee,
-        quoteForOneEth: quoteForOneEthResult.result,
+        quoteForOneEth,
     };
 }
 

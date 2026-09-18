@@ -20,9 +20,9 @@ Qué hace hoy:
 5. Metadata [Bazaar](https://docs.x402.org/extensions/bazaar.md) por colección (no un único endpoint global).
 6. Alertas Telegram si falla el mint o si el gas nativo de la wallet de settlement está bajo (cron diario).
 
-Redes **activas** (`SUPPORTED_CHAINS`): Polygon `137`, Base `8453`, Base Sepolia `84532`.
+Redes **activas** (`SUPPORTED_CHAINS`): Polygon `137`, Base `8453`, Base Sepolia `84532`, Arc `5042` (mint atómico cuando exista `FORWARDER_CONTRACT_ADDRESSES[5042]`).
 
-Redes **preparadas pero no activas**: Arc `5042` y Robinhood Chain `4663` (definiciones, USDC/USDG, Multicall3, RPCs). Falta forwarder, facilitador adecuado y, en Robinhood, Permit2. Detalle en [docs/facilitators.md](docs/facilitators.md).
+Redes **preparadas pero no activas**: Robinhood Chain `4663` (USDG + Permit2, no implementado). Detalle en [docs/facilitators.md](docs/facilitators.md).
 
 Esto **no** es todavía el gateway final de producción (reembolsos, Permit2, tests de integración, UI propia). El endpoint de mint sí se usa.
 
@@ -45,9 +45,11 @@ Casos on-chain que implementa el handler:
 
 | Token de la colección | Protocol fee | Función del forwarder |
 | --- | --- | --- |
-| USDC | 0 | `mintWithAuthorization` |
-| USDC | > 0 | `mintWithAuthorizationUSDCWithNativeProtocolFee` (pool WETH/USDC) |
-| Nativo (`address(0)`) | 0 o > 0 | `mintWithAuthorizationNative` (el cliente paga USDC; el forwarder cubre el nativo vía pool) |
+| USDC | 0 | `mintWithAuthorization` (también en Arc) |
+| USDC | > 0 | `mintWithAuthorizationUSDCWithNativeProtocolFee` (pool WETH/USDC; **no** en Arc) |
+| Nativo (`address(0)`) | 0 o > 0 | Base/Polygon: `mintWithAuthorizationNative` (swap vía pool). **Arc:** `mintWithAuthorizationNativeUSDC` (sin swap) |
+
+En Arc el gas nativo **es** USDC (18 decimales) y el cobro x402 usa el ERC-20 USDC (`0x3600…0000`, 6 decimales, EIP-3009). El `payTo` sigue siendo el forwarder (`N2MMintmasterX402Arc`). Tras el pull EIP-3009 el forwarder ya tiene USDC nativo (mismo saldo) y llama `mintTo` con `msg.value` = mint + protocol fee (18 decimales). Quote 1:1, sin slippage de DEX (`nativeUsdcToErc20Amount`, techo 18→6). Colecciones ERC-20 USDC con `protocolFee > 0` en Arc → `400`.
 
 Otros ERC-20 → `400`. Permit2 no está implementado.
 
@@ -67,6 +69,7 @@ Ejemplos locales:
 
 - http://localhost:3000/x402mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/2
 - `http://localhost:3000/x402mint/8453/<collection>/1`
+- `http://localhost:3000/x402mint/5042/<collection>/1` (402 si hay forwarder configurado; si no, `400`)
 
 ### `GET /api/mint/[chainId]/[contractAddress]/[amount]`
 
@@ -89,8 +92,9 @@ Comprueba el saldo nativo de la wallet de settlement en cada red de `SUPPORTED_C
 | Pieza | Qué hace |
 | --- | --- |
 | `app/x402mint/.../route.ts` | Gateway: precio, paywall, verify, mint en el forwarder. |
+| `lib/facilitator/verifyOnlyFacilitator.ts` | Facilitador verify-only **interno** (in-process, sin HTTP). Usado en Arc y en `SELF_FACILITATOR_CHAINS`. |
 | `lib/withX402VerifyOnly.ts` | Wrapper propio: verifica x402 y **no** llama `/settle`; pasa la autorización EIP-3009 al handler. |
-| `lib/networks.ts` | Cadenas, USDC/USDG, forwarder, pools, RPC, Multicall3. |
+| `lib/networks.ts` | Cadenas, USDC/USDG, forwarder, pools, RPC, Multicall3, `SELF_FACILITATOR_CHAINS`. |
 | `lib/mintContractReads.ts` | Multicall: `protocolFee`, `erc20PaymentAddress`, `mintFee`/`mintPrice`, quote USDC por 1 nativo. |
 | `lib/rpc.ts` | Transporte con fallback de RPCs; errores on-chain → mensaje de usuario + header `x-x402-error` (el paywall no lee el body JSON). |
 | `lib/supabase.ts` | `ipfs_logo` y `name` de `MintingPages` (cache ~24 h). Falla el boot si faltan las env de Supabase. |
@@ -103,12 +107,12 @@ Stack: Next.js 16 App Router, `@x402/*` v2, viem, pnpm.
 
 Detalle, `/supported`, alternativas y checklist de redes nuevas: **[docs/facilitators.md](docs/facilitators.md)**.
 
-| | Testnet | Mainnet |
-| --- | --- | --- |
-| Env | `TESTNET_FACILITATOR_URL` | `FACILITATOR_URL` |
-| Default | `https://x402.org/facilitator` | `https://facilitator.payai.network` |
+| | Testnet | Mainnet (PayAI) | Arc / `SELF_FACILITATOR_CHAINS` |
+| --- | --- | --- | --- |
+| Env | `TESTNET_FACILITATOR_URL` | `FACILITATOR_URL` | in-process (`getVerifyOnlyFacilitatorClient`) |
+| Default | `https://x402.org/facilitator` | `https://facilitator.payai.network` | interno; no hay URL |
 
-PayAI cubre las mainnets **activas** (Base, Polygon). No cubre Arc ni Robinhood. En este proyecto el facilitador **solo verifica**; la TX la enviamos nosotros.
+PayAI cubre Base y Polygon. Arc usa el facilitador propio interno (PayAI no lista `eip155:5042`). El facilitador **solo verifica**; la TX la enviamos nosotros.
 
 ## Redes
 
@@ -117,12 +121,12 @@ PayAI cubre las mainnets **activas** (Base, Polygon). No cubre Arc ni Robinhood.
 | 8453 | Base | Activo | PayAI | USDC `0x833589fC…` |
 | 137 | Polygon | Activo | PayAI | USDC `0x3c499c54…` |
 | 84532 | Base Sepolia | Activo | x402.org | USDC testnet `0x036CbD53…` |
-| 5042 | Arc | No (datos parciales) | No hay PayAI / Dexter `exact` | USDC nativo EIP-3009 |
-| 4663 | Robinhood | No (datos parciales) | Dexter/Primer/Solvador vía Permit2 | USDG (no USDC, no EIP-3009) |
+| 5042 | Arc | En `SUPPORTED_CHAINS`; falta pegar forwarder | Facilitador propio | USDC ERC-20 `0x3600…0000` (EIP-3009, 6 dec.) |
+| 4663 | Robinhood | No | Dexter/Primer/Solvador vía Permit2 | USDG (no USDC, no EIP-3009) |
 
 `isTestnet` mira `84532`, `11155111`, `80002`. Un `chainId` desconocido no hace fallback a otra red.
 
-Forwarders activos: Polygon `0x52f17BEd…`, Base `0x5F5a6890…`, Base Sepolia `0xDD164E8A…`.
+Forwarders activos: Polygon `0x52f17BEd…`, Base `0x5F5a6890…`, Base Sepolia `0xDD164E8A…`. Arc: pendiente de desplegar.
 
 ## Variables de entorno
 
@@ -140,7 +144,7 @@ No commitear secretos.
 
 | Variable | Uso |
 | --- | --- |
-| `FACILITATOR_URL` | Mainnet. Default PayAI. |
+| `FACILITATOR_URL` | Mainnet (no Arc). Default PayAI. |
 | `TESTNET_FACILITATOR_URL` | Testnet. Default x402.org. |
 
 **Paywall / branding**
@@ -196,9 +200,10 @@ Hace falta `.env.local` con al menos `PRIVATE_KEY` y las claves de Supabase, má
 2. **Reembolso si el mint revierte después de un cobro**: en el flujo actual el cobro va en la misma TX que el mint, así que un revert no deja el USDC cobrado. Sigue siendo un riesgo si se reactivara `/api/mint` (`settle` después del mint) o un path no atómico.
 3. **`/api/mint`** comentado; no alineado con el gateway.
 4. **UI** `/mint` y `/premium` son demo o stub; el producto es el endpoint + paywall x402.
-5. **Arc / Robinhood** no están en `SUPPORTED_CHAINS`.
-6. Sin tests de integración automatizados de `/x402mint`.
-7. `proxy.ts` no debe tomarse como configuración de producción del mint.
+5. **Arc:** en `SUPPORTED_CHAINS`, pero el mint no arranca hasta `FORWARDER_CONTRACT_ADDRESSES[5042]` (`N2MMintmasterX402Arc`). Caso principal: nativo (`address(0)`), con o sin protocol fee → `mintWithAuthorizationNativeUSDC`. ERC-20 USDC + `protocolFee === 0` sigue con `mintWithAuthorization`. ERC-20 USDC + protocol fee nativo no está soportado. Gas de la wallet = USDC nativo.
+6. **Robinhood** no está en `SUPPORTED_CHAINS` (Permit2 + USDG).
+7. Sin tests de integración automatizados de `/x402mint`.
+8. `proxy.ts` no debe tomarse como configuración de producción del mint.
 
 ## Convenciones
 

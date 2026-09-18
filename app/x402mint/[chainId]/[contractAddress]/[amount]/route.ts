@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createPublicClient, createWalletClient, formatUnits, Chain, isAddress, zeroAddress } from "viem";
+import { createPublicClient, createWalletClient, formatUnits, Chain, getAddress, isAddress, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { x402ResourceServer, HTTPFacilitatorClient } from "@x402/core/server";
 import { registerExactEvmScheme } from "@x402/evm/exact/server";
@@ -10,7 +10,8 @@ import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
 import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
 // import { facilitator } from "@coinbase/x402";
-import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, isTestnet } from "../../../../../lib/networks";
+import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, USDC_EIP712, isNativeUsdcChain, isTestnet, nativeUsdcToErc20Amount, usesSelfFacilitator } from "../../../../../lib/networks";
+import { getVerifyOnlyFacilitatorClient } from "../../../../../lib/facilitator/verifyOnlyFacilitator";
 import {
     getRpcTransport,
     extractOnchainErrorMessage,
@@ -216,13 +217,34 @@ const handler = async (
                 "outputs": [],
                 "stateMutability": "payable",
                 "type": "function"
+            },
+            {
+                "inputs": [
+                    { "internalType": "address", "name": "erc20CollectionPaymentAddress", "type": "address" },
+                    { "internalType": "address", "name": "collection", "type": "address" },
+                    { "internalType": "uint256", "name": "erc20Amount", "type": "uint256" },
+                    { "internalType": "uint256", "name": "mintingFeeAmount", "type": "uint256" },
+                    { "internalType": "address", "name": "payer", "type": "address" },
+                    { "internalType": "uint256", "name": "validAfter", "type": "uint256" },
+                    { "internalType": "uint256", "name": "validBefore", "type": "uint256" },
+                    { "internalType": "bytes32", "name": "nonce", "type": "bytes32" },
+                    { "internalType": "uint8", "name": "v", "type": "uint8" },
+                    { "internalType": "bytes32", "name": "r", "type": "bytes32" },
+                    { "internalType": "bytes32", "name": "s", "type": "bytes32" },
+                    { "internalType": "address", "name": "to", "type": "address" },
+                    { "internalType": "uint256", "name": "nftAmount", "type": "uint256" }
+                ],
+                "name": "mintWithAuthorizationNativeUSDC",
+                "outputs": [],
+                "stateMutability": "payable",
+                "type": "function"
             }
         ] as const;
 
         const isErc20Usdc = contractPaymentAddress.toLowerCase() === USDC_ADDRESS.toLowerCase();
         const isErc20Native = contractPaymentAddress === zeroAddress;
 
-        let resolvedFunctionName: 'mintWithAuthorization' | 'mintWithAuthorizationNative' | 'mintWithAuthorizationUSDCWithNativeProtocolFee';
+        let resolvedFunctionName: 'mintWithAuthorization' | 'mintWithAuthorizationNative' | 'mintWithAuthorizationUSDCWithNativeProtocolFee' | 'mintWithAuthorizationNativeUSDC';
         let resolvedArgs: any[];
 
         // Extract signature components
@@ -235,7 +257,13 @@ const handler = async (
         const validAfter = BigInt(ctx.paymentAuth.authorization.validAfter);
         const validBefore = BigInt(ctx.paymentAuth.authorization.validBefore);
         const nonce = ctx.paymentAuth.authorization.nonce as `0x${string}`;
-        const to = ctx.paymentAuth.authorization.from as `0x${string}`;
+        // `to` del forwarder = destinatario del NFT (el pagador).
+        // `authorization.to` es el destinatario EIP-3009 del USDC (el forwarder); se valida abajo.
+        const to = payer;
+        forwarderAddress = getForwarderAddress(chain.id);
+        if (getAddress(ctx.paymentAuth.authorization.to) !== getAddress(forwarderAddress)) {
+            throw new Error("Payment recipient does not match the forwarder");
+        }
 
         if (isErc20Usdc) {
             if (totalProtocolFee === 0n) {
@@ -256,6 +284,10 @@ const handler = async (
                     to,
                     amount
                 ];
+            } else if (isNativeUsdcChain(chain.id)) {
+                throw new Error(
+                    "Arc collections priced in ERC-20 USDC with a native protocol fee are not supported. Use a native-priced collection.",
+                );
             } else {
                 logDev("Case 2: USDC, with protocol fee (native ETH)");
                 // Case 2: USDC, with protocol fee (native ETH)
@@ -280,31 +312,50 @@ const handler = async (
                 ];
             }
         } else if (isErc20Native) {
-            if (totalProtocolFee === 0n) {
-                logDev("Case 3: Native ETH, no protocol fee");
+            const mintingFeeAmount = mintFee + totalProtocolFee;
+            if (isNativeUsdcChain(chain.id)) {
+                logDev("Case Arc: native USDC collection (mint + protocol fee as msg.value, no swap)");
+                resolvedFunctionName = 'mintWithAuthorizationNativeUSDC';
+                resolvedArgs = [
+                    USDC_ADDRESS,
+                    contractAddress as `0x${string}`,
+                    erc20Amount,
+                    mintingFeeAmount,
+                    payer,
+                    validAfter,
+                    validBefore,
+                    nonce,
+                    v,
+                    r,
+                    s,
+                    to,
+                    amount
+                ];
             } else {
-                logDev("Case 4: Native ETH, with protocol fee (native ETH)");
+                if (totalProtocolFee === 0n) {
+                    logDev("Case 3: Native ETH, no protocol fee");
+                } else {
+                    logDev("Case 4: Native ETH, with protocol fee (native ETH)");
+                }
+                const poolAddress = getWETHUSDCPoolAddress(chain.id);
+                resolvedFunctionName = 'mintWithAuthorizationNative';
+                resolvedArgs = [
+                    USDC_ADDRESS,
+                    contractAddress as `0x${string}`,
+                    poolAddress,
+                    erc20Amount,
+                    mintingFeeAmount,
+                    payer,
+                    validAfter,
+                    validBefore,
+                    nonce,
+                    v,
+                    r,
+                    s,
+                    to,
+                    amount
+                ];
             }
-            // Case 3 & 4: Native ETH
-            const poolAddress = getWETHUSDCPoolAddress(chain.id);
-            const mintingFeeAmount = totalProtocolFee === 0n ? mintFee : mintFee + totalProtocolFee;
-            resolvedFunctionName = 'mintWithAuthorizationNative';
-            resolvedArgs = [
-                USDC_ADDRESS,
-                contractAddress as `0x${string}`,
-                poolAddress,
-                erc20Amount,
-                mintingFeeAmount,
-                payer,
-                validAfter,
-                validBefore,
-                nonce,
-                v,
-                r,
-                s,
-                to,
-                amount
-            ];
             logDev("DEBUG: Args: ", resolvedArgs);
         } else {
             throw new Error("Invalid payment configuration");
@@ -312,7 +363,6 @@ const handler = async (
 
         functionName = resolvedFunctionName;
         args = resolvedArgs;
-        forwarderAddress = getForwarderAddress(chain.id);
         logDev("Before sending transaction");
         const hash = await walletClient.writeContract({
             address: forwarderAddress,
@@ -408,7 +458,7 @@ function getMintNftX402Config(
     const forwarderAddress = getForwarderAddress(chain.id);
     const canonicalContractAddress = contractAddress.toLowerCase();
     const blockExplorerUrl = chain.blockExplorers?.default.url || "https://app.nfts2me.com";
-    const chainTag = chain.id === 8453 ? "base" : chain.id === 84532 ? "base-sepolia" : "evm";
+    const chainTag = chain.id === 8453 ? "base" : chain.id === 84532 ? "base-sepolia" : chain.id === 5042 ? "arc" : "evm";
     const description =
         `Mint NFTs from the "${collectionName}" collection on ${chain.name} through NFTs2Me using x402. ` +
         `Set the amount in the URL to the number of NFTs to mint. Collection contract: ${canonicalContractAddress}`;
@@ -441,12 +491,15 @@ function getMintNftX402Config(
                             finalPrice = mintFee + usdcProtocolFeeWithSlippage;
                         }
                     } else if (isErc20Native) {
-                        if (totalProtocolFee === 0n) {
+                        const totalNativeFee = mintFee + totalProtocolFee;
+                        if (isNativeUsdcChain(chain.id)) {
+                            // 1:1 native USDC ↔ ERC-20 USDC. No DEX slippage. Ceiling keeps 18→6 conversion safe.
+                            finalPrice = nativeUsdcToErc20Amount(totalNativeFee);
+                        } else if (totalProtocolFee === 0n) {
                             const usdcMintFee = (mintFee * quoteForOneEth) / 10n ** 18n;
                             const usdcMintFeeWithSlippage = (usdcMintFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcMintFeeWithSlippage;
                         } else {
-                            const totalNativeFee = mintFee + totalProtocolFee;
                             const usdcTotalFee = (totalNativeFee * quoteForOneEth) / 10n ** 18n;
                             const usdcTotalFeeWithSlippage = (usdcTotalFee * SLIPPAGE_MULTIPLIER + 99n) / 100n;
                             finalPrice = usdcTotalFeeWithSlippage;
@@ -459,6 +512,14 @@ function getMintNftX402Config(
                     const price = finalPrice + commission;
                     logDev("DEBUG: Contract data fetched:", { totalProtocolFee, erc20PaymentAddress, mintFee, commission, commissionEnabled: COMMISSION_ENABLED, finalPrice: finalPrice.toString(), price: price.toString() });
 
+                    const eip712 = USDC_EIP712[chain.id];
+                    if (eip712) {
+                        return {
+                            amount: price.toString(),
+                            asset: USDC_ADDRESS,
+                            extra: { name: eip712.name, version: eip712.version },
+                        };
+                    }
                     return formatUnits(price, COMMISSION_DECIMALS);
                 },
                 network,
@@ -548,8 +609,10 @@ function validateChainConfig(chainId: number) {
     // Validate USDC Address
     getUsdcAddress(chainId);
 
-    // Validate WETH/USDC Pool Address
-    getWETHUSDCPoolAddress(chainId);
+    // Pool Uniswap solo en cadenas donde el nativo no es USDC (quote nativo↔USDC).
+    if (!isNativeUsdcChain(chainId)) {
+        getWETHUSDCPoolAddress(chainId);
+    }
 }
 
 function formatLogoUrl(ipfsUrl?: string | null): string | undefined {
@@ -593,7 +656,7 @@ function parseMintAmountParam(raw: string): { ok: true; amount: string } | { ok:
 
 function unsupportedPaymentTokenMessage(chainId: number, paymentAddress: string): string {
     const usdc = getUsdcAddress(chainId);
-    return `Unsupported payment token ${paymentAddress}. Only USDC (${usdc}) and Native ETH (${zeroAddress}) are supported.`;
+    return `Unsupported payment token ${paymentAddress}. Only USDC (${usdc}) and Native (${zeroAddress}) are supported.`;
 }
 
 function toBazaarServiceName(collectionName: string): string {
@@ -663,25 +726,45 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
 
     const contractData = {
         protocolFee: BigInt(cachedContractData.protocolFee),
-        erc20PaymentAddress: cachedContractData.erc20PaymentAddress,
+        erc20PaymentAddress: cachedContractData.erc20PaymentAddress as `0x${string}`,
         mintFee: BigInt(cachedContractData.mintFee),
         quoteForOneEth: BigInt(cachedContractData.quoteForOneEth),
     } as const;
     erc20PaymentAddress = contractData.erc20PaymentAddress;
+
+    if (isNativeUsdcChain(chain.id)) {
+        const usdc = getUsdcAddress(chain.id);
+        const isUsdc = contractData.erc20PaymentAddress.toLowerCase() === usdc.toLowerCase();
+        const isNative = contractData.erc20PaymentAddress === zeroAddress;
+        if (!isUsdc && !isNative) {
+            return NextResponse.json(
+                { error: unsupportedPaymentTokenMessage(chain.id, contractData.erc20PaymentAddress) },
+                { status: 400 },
+            );
+        }
+        if (isUsdc && contractData.protocolFee !== 0n) {
+            return NextResponse.json(
+                {
+                    error: "Arc collections priced in ERC-20 USDC with a native protocol fee are not supported. Use a native-priced collection.",
+                },
+                { status: 400 },
+            );
+        }
+    }
 
     // Fetch minting page info from Supabase
     const mintingPageInfo = await getMintingPageLogoAndName(chainId, contractAddress);
 
     const testnet = isTestnet(chain.id);
 
-    // Seleccionar dinámicamente la URL del facilitador según la red (testnet o mainnet)
-    // Aquí redes soportadas y más información: https://docs.cdp.coinbase.com/x402/quickstart-for-sellers
-    const facilitatorUrl = testnet
-        ? (process.env.TESTNET_FACILITATOR_URL || "https://x402.org/facilitator")
-        : (process.env.FACILITATOR_URL || "https://facilitator.payai.network");
-
-    // Este usa en mainnet el facilitator de payai.
-    const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl })
+    // PayAI (u otro hosted) en las redes que cubre; Arc y futuras van a nuestro facilitador verify-only.
+    const facilitatorClient = usesSelfFacilitator(chain.id)
+        ? getVerifyOnlyFacilitatorClient()
+        : new HTTPFacilitatorClient({
+            url: testnet
+                ? (process.env.TESTNET_FACILITATOR_URL || "https://x402.org/facilitator")
+                : (process.env.FACILITATOR_URL || "https://facilitator.payai.network"),
+        });
 
     // Si quiero usar el de Coinbase.
     // Para eso tengo que hacer lo siguiente

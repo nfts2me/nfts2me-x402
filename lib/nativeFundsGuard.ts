@@ -1,7 +1,7 @@
 import { createPublicClient, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getRpcTransport } from "./rpc";
-import { getCollectionMintingPageUrl, describePaymentToken, SUPPORTED_CHAINS, USDC_ADDRESSES } from "./networks";
+import { getCollectionMintingPageUrl, describePaymentToken, SUPPORTED_CHAINS, USDC_ADDRESSES, isNativeUsdcChain } from "./networks";
 import { sendTelegramMessage } from "./telegram";
 
 const PAY_TO_EVM_ADDRESS = process.env.PAY_TO_EVM_ADDRESS;
@@ -194,6 +194,8 @@ const NATIVE_COINGECKO_ID_BY_CHAIN: Record<number, string> = {
 const priceCache = new Map<string, { cachedAtMs: number; usd: number }>();
 
 async function getNativeUsdPrice(chainId: number): Promise<number | null> {
+    if (isNativeUsdcChain(chainId)) return 1;
+
     const coingeckoId = NATIVE_COINGECKO_ID_BY_CHAIN[chainId];
     if (!coingeckoId) return null;
 
