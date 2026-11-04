@@ -1,31 +1,49 @@
 # Pendientes
 
-El camino de producción es `GET /x402mint/...`: verify-only + mint atómico en el forwarder. Detalle en el [README](README.md) y [docs/facilitators.md](docs/facilitators.md).
+Estado a 2026-11-04. La ruta de producción es `GET /x402mint/...`, con verify-only y mint atómico en el forwarder.
 
-## Hecho (no reabrir)
+## Urgente
 
-- Paywall x402 + metadata Bazaar por colección.
-- `protocolFee !== 0` en Base/Polygon (swap nativo vía pool WETH/USDC).
-- Facilitador propio verify-only interno (in-process, sin HTTP). Usado en Arc.
-- Arc `5042` en `SUPPORTED_CHAINS` (sin pool; quote 1:1). Path nativo: `mintWithAuthorizationNativeUSDC`. Forwarder `0x5F982E55…` pegado. Paywall: el bundle de `@x402/paywall` no trae Arc mainnet; se inyectan `SUPPORTED_CHAINS` en el HTML 402.
+- **Probar tras el despliegue los forwarders 2204/2205** en las cuatro redes (402 sin pago y un mint real con pago). `FORWARDER_CONTRACT_ADDRESSES` ya apunta a ellos; los antiguos (vulnerables) no se deben volver a usar.
 
-`/api/mint` (settle después del mint) está comentado a propósito: no es atómico. No reactivar.
+## Por decidir
 
-## Ahora (Arc)
+- **Mints con precio 0.** La comisión está desactivada en producción, así que las colecciones gratuitas salen a 0 USDC y el gas lo paga nuestra wallet sin límite. Hay tres opciones: activar la comisión, poner un precio mínimo que cubra el gas o rechazar las colecciones gratuitas. Ver [docs/seguridad.md](docs/seguridad.md).
 
-Forwarder desplegado y en `FORWARDER_CONTRACT_ADDRESSES[5042]`. Queda:
+## Errores y fragilidad
 
-1. Cargar la wallet de `PRIVATE_KEY` con USDC nativo (gas) si aún no está.
-2. Probar `GET /x402mint/5042/<colección>/1` con pago real (colección **nativa**, típica en Arc) y desplegar el parche del paywall a producción.
+- `pnpm lint` falla: `eslint-plugin-react` 7.37.5 no funciona con ESLint 10.
+- El logo por defecto `/x402-icon-blue.png` no existe en `public/`.
+- `COMMISSION_DECIMALS` da formato a todo el precio. Si deja de valer 6, el cobro sale mal. Habría que usar 6 (decimales de USDC) para el precio y dejar la variable solo para la comisión, o quitarla.
+- Los parches del paywall dependen del texto minificado de `@x402/paywall` 2.26.0, pero `package.json` admite `^2.26.0`. Conviene fijar la versión exacta o comprobar al arrancar que los parches se aplican.
+- El cron queda abierto si no hay `CRON_SECRET` (en producción sí está definido).
+- Los deploys de Preview no tienen variables de entorno y `/x402mint` falla en ellos.
+- Solo `UnauthorizedRelayer` del forwarder está en el ABI. Los demás errores (`TransferFailed`, `SwapFailed`, `SwapNoOutput`, `InvalidPool`, `AddressZero`, `NotSupportedOnArc`, `UnsupportedPaymentToken`) llegan a la alerta sin nombre.
+- `matic-network` en CoinGecko: comprobar que sigue dando precio para POL (si no, el cron avisa con «could not fetch USD price»).
 
-## Después
+## Mejoras
 
-- **Arc extra:** ERC-20 USDC + protocol fee nativo (hoy `400`; el 99,9% de colecciones Arc son nativas).
-- **Permit2** (tokens sin EIP-3009). Bloquea Robinhood (`4663`, USDG).
-- **Robinhood:** Permit2 + forwarder + token USDG. No está en `SUPPORTED_CHAINS`.
-- Tests de integración de `/x402mint`.
-- UI `/mint` y `/premium`: demo/stub; no son el producto.
+- No crear servidor x402, paywall y `initialize()` (`GET /supported` al facilitador) en cada petición. Por ejemplo, cachear el `x402ResourceServer` por facilitador.
+- Deduplicar las alertas de Telegram entre instancias (hoy la memoria es por instancia).
+- Firmas de smart wallets (EIP-1271/6492): el forwarder solo acepta `v,r,s`.
+- Comprobar si PayAI cataloga en Bazaar recursos que solo pasan por `/verify`.
+- Tests de integración de `/x402mint` (402, pago válido, errores) en Base Sepolia.
 
-## Fuera de alcance (salvo que se reactive un path no atómico)
+## Funcionalidad
 
-Reembolso si el cobro confirma y el mint revierte. En el flujo actual van en la misma TX: un revert no deja el USDC cobrado.
+- **Arc:** colecciones en ERC-20 USDC con protocol fee nativo (hoy devuelven 400; casi todas las de Arc son nativas).
+- **Permit2** para tokens sin EIP-3009. Es lo que bloquea Robinhood (`4663`, USDG), que además necesita forwarder y facilitador.
+
+## Limpieza
+
+- Código muerto: `app/api/mint/…` y `app/mint/page.tsx` (comentados), `readMintContractDataWithOptimisticAllowance`, `validateMintPaymentConfiguration`, `ERC20_ALLOWANCE_ABI`, el `server` exportado por `proxy.ts`, el paquete `@coinbase/x402` y los imports sin usar de `app/page.tsx`.
+- `package.json` se llama `"example"`.
+- Variable `NEXT_PUBLIC_SUPABASE_ANON_KEY` sin usar en `.env.local`.
+- `maybeSendDailyNativeBalanceAlert` no envía nada; solo clasifica. El nombre confunde.
+- El `console.log` de `readMintContractDataWithMulticall` sale también en producción.
+- Demo `/premium` (`proxy.ts`): decidir si se mantiene.
+
+## Fuera de alcance
+
+- Reembolsos si se cobra y el mint revierte: en el flujo atómico van en la misma TX. El único caso es que se ejecute la autorización fuera del gateway, y se resuelve a mano (ver [docs/seguridad.md](docs/seguridad.md)).
+- No reactivar `/api/mint` (settle después del mint, no atómico).
