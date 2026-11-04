@@ -2,9 +2,9 @@
 
 Estado a 2026-11-04. La ruta de producción es `GET /x402mint/...`, con verify-only y mint atómico en el forwarder.
 
-## Urgente
+## Hecho
 
-- **Probar tras el despliegue los forwarders 2204/2205** en las cuatro redes (402 sin pago y un mint real con pago). `FORWARDER_CONTRACT_ADDRESSES` ya apunta a ellos; los antiguos (vulnerables) no se deben volver a usar.
+- **Forwarders 2204/2205 en producción** (2026-11-04). Se probó el 402 en las cuatro redes y un mint real con pago con las colecciones de prueba de [docs/operacion.md](docs/operacion.md#colecciones-de-prueba). Los antiguos, que son vulnerables, no se deben volver a usar.
 
 ## Por decidir
 

@@ -62,6 +62,28 @@ En producción la **comisión está desactivada** (`COMMISSION_ENABLED`; comprob
 
 El directorio local no está enlazado con `vercel link`. Para consultar el proyecto desde la terminal, el token `VERCEL_TOKEN_SOCCERARENA` está en `.env.deploy.local` (ignorado por git), y se puede usar con la API REST o con `vercel --token`. `vercel.json` solo define los crons.
 
+## Colecciones de prueba
+
+Son colecciones baratas con el mint abierto a fecha 2026-11-04, para probar tras cada despliegue. Primero, sin pago: tiene que salir el 402 con el forwarder correcto como `payTo`. Después, un mint real desde el navegador.
+
+| Red | Precio | Camino del forwarder | URL |
+| --- | --- | --- | --- |
+| Polygon | ~0,058 USDC | nativo, con swap (`mintWithAuthorizationNative`) | `https://x402.nfts2me.com/x402mint/137/0x9999a3fB60FE2340f24244676dcA9A48120B9cBC/1` |
+| Arc | ~0,10 USDC | `mintWithAuthorizationNativeUSDC` | `https://x402.nfts2me.com/x402mint/5042/0x5C3f650120aba32D2c0F2bE6Dbeb048210C98564/1` |
+| Base Sepolia | 0,01 USDC | USDC (`mintWithAuthorization`) | `https://x402.nfts2me.com/x402mint/84532/0xB2aeC85ba3A4ac509879AE4f7d9FFC5E297818D3/1` |
+| Base Sepolia | ~0,19 USDC | nativo, con swap | `https://x402.nfts2me.com/x402mint/84532/0x2FD835d067Be70A4FE25D2A41E45121eae924989/1` |
+
+Base mainnet no tiene colección de prueba fija: la más barata cobraba ~0,24 USDC y recorre el mismo camino que Polygon.
+
+Para ver el 402 sin navegador (decodifica la cabecera `PAYMENT-REQUIRED`):
+
+```bash
+curl -sS -D - -o /dev/null -H "Accept: application/json" "https://x402.nfts2me.com/x402mint/137/0x9999a3fB60FE2340f24244676dcA9A48120B9cBC/1" \
+  | grep -i '^payment-required:' | cut -d' ' -f2- | tr -d '\r' | base64 -d
+```
+
+Si alguna deja de servir (mint cerrado o agotado), busca otra entre las filas recientes de `MintingPages` para esa red. Comprueba el precio con el multicall de `lib/mintContractReads.ts` y simula `mintTo(to, 1)` desde el forwarder con `eth_call`.
+
 ## Cron de saldo de gas
 
 `GET /api/cron/native-balance` (`maxDuration` de 60 s).
