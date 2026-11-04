@@ -47,8 +47,15 @@ export function extractOnchainErrorMessage(error: unknown): string {
             (err) => err instanceof ContractFunctionRevertedError,
         );
         if (revertError instanceof ContractFunctionRevertedError) {
-            const reason = revertError.reason ?? revertError.shortMessage;
-            if (reason) return reason;
+            if (revertError.reason) return revertError.reason;
+            // Custom errors (p. ej. UnauthorizedRelayer()): viem no rellena `reason`,
+            // solo `data.errorName`. Sin esto se perdería el nombre del error.
+            const errorName = revertError.data?.errorName;
+            if (errorName) {
+                const errorArgs = (revertError.data?.args ?? []).map(String).join(", ");
+                return `${errorName}(${errorArgs})`;
+            }
+            if (revertError.shortMessage) return revertError.shortMessage;
         }
     }
 
@@ -68,11 +75,21 @@ function withSupportHint(message: string): string {
     return `${trimmed}${separator}${SUPPORT_HINT}`;
 }
 
+/** El forwarder (2204/2205) rechaza la llamada porque la wallet de PRIVATE_KEY no es relayer. */
+export function isUnauthorizedRelayerErrorMessage(message: string): boolean {
+    return /UnauthorizedRelayer/i.test(message);
+}
+
 /**
  * Mensaje orientado al usuario final para mostrar en el paywall.
  * El paywall de x402 solo lee status + statusText en respuestas no-OK, no el JSON body.
  */
 export function toUserFacingMintError(message: string): string {
+    if (isUnauthorizedRelayerErrorMessage(message)) {
+        return withSupportHint(
+            "Minting failed: the gateway wallet is not an authorized relayer on the forwarder contract (the forwarder owner must call setRelayer).",
+        );
+    }
     if (
         /insufficient funds/i.test(message) ||
         /insufficient native tokens/i.test(message) ||

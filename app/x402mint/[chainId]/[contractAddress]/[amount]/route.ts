@@ -238,6 +238,12 @@ const handler = async (
                 "outputs": [],
                 "stateMutability": "payable",
                 "type": "function"
+            },
+            // Forwarders 2204/2205: revert si quien llama no es relayer autorizado.
+            {
+                "inputs": [],
+                "name": "UnauthorizedRelayer",
+                "type": "error"
             }
         ] as const;
 

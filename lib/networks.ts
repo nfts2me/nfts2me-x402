@@ -31,10 +31,20 @@ export const USDG_ADDRESSES: Record<number, `0x${string}`> = {
 // Base/Polygon/Sepolia: N2MMintmasterX402.sol
 // Arc (5042): N2MMintmasterX402Arc.sol (mintWithAuthorizationNativeUSDC; sin pool).
 export const FORWARDER_CONTRACT_ADDRESSES: Record<number, `0x${string}`> = {
-    137: "0x52f17BEdBb1BC243000524a4622F5D621A75c713", // Polygon Mainnet
-    8453: "0x5F5a6890000d932B4a8cec5b408F26339A84437C", // Base mainnet
-    84532: "0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D", // BaseSepolia
-    5042: "0x5F982E5590173e756B481508841998A0bE56138F", // Arc (5042) N2MMintmasterX402Arc
+    // Forwarders 2204 (N2MMintmasterX402) y 2205 (N2MMintmasterX402Arc), desplegados el 2026-11-04.
+    // Solo aceptan llamadas de relayers autorizados: la wallet de PRIVATE_KEY tiene que ser relayer
+    // (setRelayer desde el owner); si no, revierten con UnauthorizedRelayer().
+    //
+    // NO volver a usar los forwarders antiguos (2200/2202): son VULNERABLES, cualquiera podía
+    // mintear con una autorización ajena y desviar el USDC (nfts2me-contracts/docs/seguridad.md, hallazgo 1).
+    //   137:   0x52f17BEdBb1BC243000524a4622F5D621A75c713
+    //   8453:  0x5F5a6890000d932B4a8cec5b408F26339A84437C
+    //   84532: 0xDD164E8A0E4d1E5C6ca6e59F85223Aa56506080D
+    //   5042:  0x5F982E5590173e756B481508841998A0bE56138F
+    137: "0x23591Df3EEBAe09A0C9cD6A3E47143db7c768F54", // Polygon Mainnet
+    8453: "0x46dBFE8EA0Fe03ebe2783b80b18ff1da2D558676", // Base mainnet
+    84532: "0xF4Ad243825B4e7D8023Ced6955d8Ed56EEa7542d", // BaseSepolia
+    5042: "0xbb2b60063E25bA35a94293D8BD71D37D49b593FE", // Arc (5042) N2MMintmasterX402Arc
 };
 
 export const TESTNET_CHAIN_IDS = ["84532", "11155111", "80002"];

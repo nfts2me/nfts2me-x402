@@ -1,6 +1,6 @@
 import { createPublicClient, formatUnits } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { getRpcTransport } from "./rpc";
+import { getRpcTransport, isUnauthorizedRelayerErrorMessage } from "./rpc";
 import { getCollectionMintingPageUrl, describePaymentToken, SUPPORTED_CHAINS, USDC_ADDRESSES, isNativeUsdcChain } from "./networks";
 import { sendTelegramMessage } from "./telegram";
 
@@ -147,7 +147,9 @@ export async function alertMintFailure(alert: MintFailureAlert) {
 
     const title = lowFunds
         ? `⚠️ Mint failed: low native gas on ${chainLabel}`
-        : `🚨 Mint failed on ${chainLabel}`;
+        : isUnauthorizedRelayerErrorMessage(errorMessage)
+          ? `🚨 Mint failed: gateway wallet is not a relayer on the forwarder (${chainLabel}). Call setRelayer from the owner.`
+          : `🚨 Mint failed on ${chainLabel}`;
 
     const lines = [
         title,
