@@ -9,7 +9,9 @@
     "dev:polling-webpack": "CHOKIDAR_USEPOLLING=1 WATCHPACK_POLLING=true next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "clean": "node scripts/clean.mjs",
+    "clean:all": "node scripts/clean.mjs --deps"
   },
   "dependencies": {
     "@coinbase/x402": "^2.1.0",
