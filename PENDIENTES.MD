@@ -34,11 +34,12 @@ Estado a 2026-11-04. La ruta de producción es `GET /x402mint/...`, con verify-o
 
 ## Funcionalidad
 
-- **Colecciones RANDOM y SPECIFY.** Hace falta un forwarder nuevo: el actual tiene fijo el selector `mintTo(address,uint256)`.
-  - RANDOM (`mintRandomTo(address,uint256)`) tiene los mismos argumentos y el mismo precio: en el gateway solo cambia la función. Cada NFT cuesta gas completo (no hay mint por lotes como en 721A), así que habría que limitar `amount`.
-  - SPECIFY (`mintSpecifyTo(address,uint256[])`) necesita los IDs en la URL, comprobar que están libres y cambiar el esquema de Bazaar.
-  - CUSTOM_URI necesita el CID del metadata: fuera de alcance.
-  - Conviene que el forwarder nuevo compruebe el mint (`balanceOf(to)` antes y después).
+- **Colecciones RANDOM y SPECIFY.** El forwarder nuevo está escrito y probado en `../nfts2me-contracts` (2206 y 2207 para Arc), **sin desplegar**. Comprueba con `balanceOf` que el mint se ha entregado (`MintNotDelivered`) y añade funciones `*Custom` que reciben el calldata del mint. Las funciones actuales conservan su firma. Pasos que faltan:
+  1. Desplegar 2206 / 2207 en las cuatro redes con la wallet del gateway como relayer (ver [docs/operacion.md](docs/operacion.md#sustituir-un-forwarder)) y probar Arc en la propia red, que no se puede emular en un fork.
+  2. Cambiar `FORWARDER_CONTRACT_ADDRESSES`. Con eso las colecciones secuenciales siguen igual y el forwarder ya revierte si no hay mint.
+  3. RANDOM: llamar a las funciones `*Custom` con `mintRandomTo(to, n)` y dejar de rechazar `mintingType() == 1`. Cada NFT cuesta gas completo (no hay mint por lotes como en 721A), así que hay que limitar `amount`.
+  4. SPECIFY: `mintSpecifyTo(to, ids)`. Necesita los IDs en la URL, comprobar que están libres y cambiar el esquema de Bazaar y la app.
+  5. CUSTOM_URI necesita el CID del metadata: fuera de alcance.
 - **Arc:** colecciones en ERC-20 USDC con protocol fee nativo (hoy devuelven 400; casi todas las de Arc son nativas).
 - **Permit2** para tokens sin EIP-3009. Es lo que bloquea Robinhood (`4663`, USDG), que además necesita forwarder y facilitador.
 
