@@ -7,7 +7,7 @@ Todo ocurre en `app/x402mint/[chainId]/[contractAddress]/[amount]/route.ts` y `l
 `GET /x402mint/{chainId}/{contractAddress}/{amount}` (también responde a `HEAD`).
 
 - `chainId`: clave de `SUPPORTED_CHAINS` (`137`, `8453`, `84532`, `5042`). No hay red por defecto.
-- `contractAddress`: cualquier dirección válida (`isAddress`). **No hay lista de colecciones permitidas**: vale cualquier contrato que responda como una colección NFTs2Me.
+- `contractAddress`: cualquier dirección válida (`isAddress`). **No hay lista de colecciones permitidas**: vale cualquier contrato que responda como una colección NFTs2Me. Solo se admiten colecciones de mint **secuencial** (ver [Tipo de mint](#tipo-de-mint)).
 - `amount`: número de NFTs, `^[1-9][0-9]{0,5}$` (1–999999) tras `decodeURIComponent` y `trim`.
 
 ## Secuencia
@@ -17,20 +17,46 @@ Todo ocurre en `app/x402mint/[chainId]/[contractAddress]/[amount]/route.ts` y `l
                        dirección válida, amount válido                       → si no, 400
 2. Datos del contrato  getCachedMintContractData ('use cache', revalida 60 s, expira 120 s):
                        multicall protocolFee · erc20PaymentAddress · mintFee(n) · mintPrice()
-                       + quoteUSDCForNative(pool, 1e18) en el forwarder (no en Arc)
-3. Reglas de Arc       token ≠ USDC y ≠ nativo → 400; USDC con protocolFee > 0 → 400
-4. Supabase            name e ipfs_logo de MintingPages (deployAddress + network), caché 24 h
-5. Facilitador         Arc → interno · testnet → TESTNET_FACILITATOR_URL | x402.org
+                       · mintingType() + quoteUSDCForNative(pool, 1e18) en el forwarder (no en Arc)
+3. Tipo de mint        mintingType() legible y ≠ SEQUENTIAL (0)              → 400
+4. Reglas de Arc       token ≠ USDC y ≠ nativo → 400; USDC con protocolFee > 0 → 400
+5. Supabase            name e ipfs_logo de MintingPages (deployAddress + network), caché 24 h
+6. Facilitador         Arc → interno · testnet → TESTNET_FACILITATOR_URL | x402.org
                        · mainnet → FACILITATOR_URL | PayAI
-6. withX402VerifyOnly  sin cabecera de pago → 402 (HTML del paywall o JSON)
+7. withX402VerifyOnly  sin cabecera de pago → 402 (HTML del paywall o JSON)
                        con PAYMENT-SIGNATURE (o X-PAYMENT) → facilitador.verify
-7. Handler             comprueba authorization.to == forwarder, elige función, writeContract
+8. Handler             comprueba authorization.to == forwarder, elige función, writeContract
                        con PRIVATE_KEY, espera el recibo                     → 200 o 500
 ```
 
 En cada petición se crean un `x402ResourceServer`, un paywall y un `x402HTTPResourceServer` nuevos, porque el precio y la metadata dependen de la colección. Esto implica una llamada a `GET /supported` del facilitador por petición (`initialize()`).
 
 Nunca se llama a `/settle`. Tampoco se devuelve la cabecera `PAYMENT-RESPONSE` del estándar: la confirmación es el JSON de la respuesta.
+
+## Tipo de mint
+
+El forwarder llama siempre a `mintTo(address,uint256)`. Esa función solo existe en las colecciones secuenciales (`N2MERC721A`, `mintingType() == 0`). Las no secuenciales (`N2MERC721NS`) mintean con otras funciones:
+
+| `mintingType()` | Tipo | Función de mint de la colección |
+| --- | --- | --- |
+| 0 | SEQUENTIAL | `mintTo(address,uint256)` |
+| 1 | RANDOM | `mintRandomTo(address,uint256)` |
+| 2 | SPECIFY | `mintSpecifyTo(address,uint256[])` |
+| 3 | CUSTOM_URI | `mintCustomURITo(address,bytes32,bool)` |
+
+En una colección no secuencial sin extensión dinámica, `mintTo` cae en el `fallback`, que hace `delegatecall` a `address(0)` y **devuelve éxito sin mintear**. El forwarder no comprueba que se haya minteado, así que la TX saldría bien: el pagador pagaría, no recibiría el NFT y la colección se quedaría el nativo enviado. Reproducido el 2026-11-22 en un fork de Base Sepolia con una colección RANDOM y otra SPECIFY.
+
+Por eso el gateway lee `mintingType()` en el mismo multicall y responde 400 antes de pedir el pago si no es 0. Si la lectura falla (contratos v1 o ajenos, que no tienen `mintingType()`), no se puede saber y la petición sigue como antes.
+
+Soportar RANDOM o SPECIFY exige un forwarder nuevo (ver [PENDIENTES.MD](../PENDIENTES.MD)).
+
+### Comprobación del recibo
+
+Como red de seguridad, cuando la TX sale bien el handler cuenta en el recibo los eventos `Transfer(address(0), pagador, tokenId)` de la colección (`countErc721MintsTo`, `lib/mintReceipt.ts`). Si hay menos que `amount`, envía la alerta «Payment charged but mint NOT confirmed» por Telegram, sin agruparla con otras.
+
+- **Solo avisa.** La TX ya está minada y el cobro hecho, así que la respuesta al cliente no cambia (200). Hay que revisar la TX y, si no se entregó el NFT, devolver el dinero a mano.
+- **No añade carga.** Los logs vienen en el recibo que el handler ya espera: no hay llamadas extra al RPC. El único coste es el envío a Telegram cuando salta.
+- **Puede dar falsos avisos** con contratos que no emitan el `Transfer` estándar de ERC-721 (ERC-1155, o ERC-2309 `ConsecutiveTransfer`). Las colecciones NFTs2Me lo emiten por cada NFT. Por eso no decide la respuesta.
 
 ## Precio
 
@@ -83,6 +109,7 @@ El gateway envía la firma partida en `v`, `r` y `s`, y supone que es ECDSA de 6
 | Configuración de la cadena incompleta | 400 | `{ error: "Invalid chain configuration: …" }` |
 | Dirección inválida | 400 | `{ error }` |
 | `amount` inválido | 400 | `{ error }` + cabecera `x-x402-error` |
+| Colección no secuencial (`mintingType() ≠ 0`) | 400 | `{ error }` + cabecera `x-x402-error` |
 | Arc con token no admitido o USDC con protocol fee | 400 | `{ error }` |
 | Sin pago | 402 | HTML del paywall (navegador) o JSON x402, con la cabecera `PAYMENT-REQUIRED` |
 | Pago inválido | 402 | Lo que devuelve x402 |
@@ -134,6 +161,7 @@ No está comprobado que los facilitadores cataloguen recursos que solo pasan por
 | `x402mint no-payment-required` | La ruta no casa con la configuración x402 (error de configuración). |
 | `x402mint verify wrapper` | Excepción durante el verify. |
 | `x402mint settlement` | Falla la TX al forwarder o revierte. |
+| `x402mint mint not delivered` | La TX salió bien pero el recibo no tiene los mints esperados (ver [Comprobación del recibo](#comprobación-del-recibo)). No se agrupa: cada caso es un pago que revisar. |
 
 Dos errores tienen título y mensaje propios:
 

@@ -42,10 +42,11 @@ Las listas de cadenas están duplicadas: `SUPPORTED_CHAINS` aquí y `X402_SUPPOR
 | `lib/withX402VerifyOnly.ts` | Envoltorio propio sobre `x402HTTPResourceServer`: hace el 402 y el verify, **no** el settle, y pasa la autorización EIP-3009 al handler. Trata `HEAD` como `GET` sin mintear. |
 | `lib/facilitator/verifyOnlyFacilitator.ts` | Facilitador interno (en el mismo proceso, sin HTTP) que solo verifica. Se usa en las cadenas de `SELF_FACILITATOR_CHAINS` (hoy Arc). |
 | `lib/networks.ts` | Toda la configuración por cadena: `SUPPORTED_CHAINS`, USDC, forwarders, pools Uniswap, RPC extra, Multicall3, testnets, Arc (USDC nativo). |
-| `lib/mintContractReads.ts` | Multicall a la colección (`protocolFee`, `erc20PaymentAddress`, `mintFee(n)` o `mintPrice()` v1) y quote USDC por 1 nativo (`forwarder.quoteUSDCForNative`). |
+| `lib/mintContractReads.ts` | Multicall a la colección (`protocolFee`, `erc20PaymentAddress`, `mintFee(n)` o `mintPrice()` v1, `mintingType()`) y quote USDC por 1 nativo (`forwarder.quoteUSDCForNative`). |
 | `lib/rpc.ts` | Transporte viem con RPC de reserva, extracción de mensajes de error, cabecera `x-x402-error` y los parches que se inyectan en el HTML del paywall. |
 | `lib/supabase.ts` | `name` e `ipfs_logo` de `MintingPages` con `'use cache'` (revalida cada 24 h). **Lanza al importar** si faltan sus variables de entorno. |
 | `lib/nativeFundsGuard.ts` | Alertas de mint fallido y comprobación diaria del gas nativo de la wallet. |
+| `lib/mintReceipt.ts` | Cuenta en el recibo los NFTs minteados al pagador (aviso de cobro sin mint). |
 | `lib/telegram.ts` | `sendTelegramMessage`. Nunca lanza. |
 | `app/api/cron/native-balance/route.ts` | Cron diario del saldo de gas. Ver [operacion.md](operacion.md#cron-de-saldo-de-gas). |
 | `proxy.ts` | Demo de `paymentProxy` sobre `/premium` (Base Sepolia, $0.01). Es el *proxy* (antes *middleware*) de Next 16 y se ejecuta en todas las peticiones, pero solo actúa sobre `/premium`. **No** protege el mint. |

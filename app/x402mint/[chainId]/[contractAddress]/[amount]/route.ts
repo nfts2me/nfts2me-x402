@@ -8,7 +8,7 @@ import { getMintingPageLogoAndName } from "../../../../../lib/supabase";
 import { withX402VerifyOnly, VerifyOnlyContext, PaymentAuthorization } from "../../../../../lib/withX402VerifyOnly";
 import { createPaywall } from '@x402/paywall';
 import { evmPaywall } from '@x402/paywall/evm';
-import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress } from "../../../../../lib/mintContractReads";
+import { readMintContractDataWithMulticall, getUsdcAddress, getWETHUSDCPoolAddress, SEQUENTIAL_MINTING_TYPE, unsupportedMintingTypeMessage } from "../../../../../lib/mintContractReads";
 // import { facilitator } from "@coinbase/x402";
 import { FORWARDER_CONTRACT_ADDRESSES, SUPPORTED_CHAINS, USDC_EIP712, isNativeUsdcChain, isTestnet, nativeUsdcToErc20Amount, usesSelfFacilitator } from "../../../../../lib/networks";
 import { getVerifyOnlyFacilitatorClient } from "../../../../../lib/facilitator/verifyOnlyFacilitator";
@@ -20,6 +20,7 @@ import {
 } from "../../../../../lib/rpc";
 import { cacheLife } from "next/cache";
 import { alertMintFailure } from "../../../../../lib/nativeFundsGuard";
+import { countErc721MintsTo } from "../../../../../lib/mintReceipt";
 
 const isDev = process.env.NODE_ENV === "development";
 const NFTS2ME_BAZAAR_ICON_URL = "https://app.nfts2me.com/assets/images/logo-text.svg";
@@ -68,6 +69,7 @@ async function getCachedMintContractData(
         erc20PaymentAddress: contractData.erc20PaymentAddress,
         mintFee: contractData.mintFee.toString(),
         quoteForOneEth: contractData.quoteForOneEth.toString(),
+        mintingType: contractData.mintingType ?? null,
     };
 }
 
@@ -387,6 +389,36 @@ const handler = async (
         }
         logDev("Minting transaction successful! Hash:", hash);
         const etherscanTxUrl = `${chain.blockExplorers?.default.url}/tx/${hash}`;
+
+        // Red de seguridad: el forwarder no comprueba que la colección haya minteado. Si en el recibo no
+        // están los Transfer de mint hacia el pagador, se avisa por Telegram para revisarlo a mano.
+        // Solo avisa: la TX ya está minada y el cobro hecho, así que la respuesta no cambia. No usa el
+        // RPC (los logs vienen en el recibo) y un fallo aquí no puede romper la respuesta.
+        try {
+            const mintedCount = countErc721MintsTo(txReceipt.logs, contractAddress, to);
+            if (BigInt(mintedCount) < amount) {
+                await alertMintFailure({
+                    chainId: chain.id,
+                    context: "x402mint mint not delivered",
+                    title: "🚨 Payment charged but mint NOT confirmed",
+                    skipDedupe: true,
+                    errorMessage:
+                        `The forwarder TX succeeded and the payer was charged, but the receipt shows ${mintedCount} of ${amountStr} ` +
+                        `ERC-721 mint Transfer events from the collection to the payer. Check the TX and refund the payer by hand ` +
+                        `if the NFTs were not delivered. TX: ${etherscanTxUrl}`,
+                    url: `/x402mint/${chain.id}/${contractAddress}/${amountStr}`,
+                    contractAddress,
+                    amount: amountStr,
+                    functionName,
+                    forwarderAddress,
+                    erc20PaymentAddress: contractData.erc20PaymentAddress,
+                    args,
+                    paymentAuth: ctx.paymentAuth,
+                });
+            }
+        } catch (checkError) {
+            console.error("Mint delivery check failed:", checkError);
+        }
 
         const mintParams = {
             chainId: String(chain.id),
@@ -737,6 +769,17 @@ export async function GET(req: NextRequest, props: { params: Promise<{ chainId: 
         quoteForOneEth: BigInt(cachedContractData.quoteForOneEth),
     } as const;
     erc20PaymentAddress = contractData.erc20PaymentAddress;
+
+    // El forwarder solo sabe llamar a mintTo(address,uint256). En una colección no secuencial esa llamada
+    // no revierte (cae en el fallback) y tampoco mintea: hay que rechazarla antes de pedir el pago.
+    const mintingType = cachedContractData.mintingType;
+    if (mintingType !== null && mintingType !== SEQUENTIAL_MINTING_TYPE) {
+        const message = unsupportedMintingTypeMessage(mintingType);
+        return NextResponse.json(
+            { error: message },
+            mintErrorResponseInit(message, 400),
+        );
+    }
 
     if (isNativeUsdcChain(chain.id)) {
         const usdc = getUsdcAddress(chain.id);

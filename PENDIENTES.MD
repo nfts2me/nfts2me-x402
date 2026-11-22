@@ -4,6 +4,7 @@ Estado a 2026-11-04. La ruta de producción es `GET /x402mint/...`, con verify-o
 
 ## Hecho
 
+- **Colecciones no secuenciales rechazadas** (2026-11-22). El gateway responde 400 si `mintingType() ≠ 0`, porque el forwarder cobraba sin mintear. Además, el handler comprueba en el recibo que se han minteado los NFTs y avisa por Telegram si faltan. Ver [docs/flujo-de-pago.md](docs/flujo-de-pago.md#tipo-de-mint).
 - **Forwarders 2204/2205 en producción** (2026-11-04). Se probó el 402 en las cuatro redes y un mint real con pago con las colecciones de prueba de [docs/operacion.md](docs/operacion.md#colecciones-de-prueba). Los antiguos, que son vulnerables, no se deben volver a usar.
 
 ## Por decidir
@@ -12,6 +13,8 @@ Estado a 2026-11-04. La ruta de producción es `GET /x402mint/...`, con verify-o
 
 ## Errores y fragilidad
 
+- La app (`monorepo-n2m`, `X402MintShowcase.tsx` y el `<link rel="payments">` de la página de mint) ofrece x402 en cualquier colección, también en las no secuenciales, que el gateway rechaza con 400. Habría que ocultarlo si `mintingType ≠ SEQUENTIAL`.
+- El forwarder no comprueba que la colección haya minteado. Con un contrato sin `mintingType()` (v1 o ajeno) cuyo `mintTo` no revierta ni mintee, se cobraría sin entregar el NFT. El handler lo detecta en el recibo y avisa por Telegram, pero el cobro ya está hecho.
 - `pnpm lint` falla: `eslint-plugin-react` 7.37.5 no funciona con ESLint 10.
 - El logo por defecto `/x402-icon-blue.png` no existe en `public/`.
 - `COMMISSION_DECIMALS` da formato a todo el precio. Si deja de valer 6, el cobro sale mal. Habría que usar 6 (decimales de USDC) para el precio y dejar la variable solo para la comisión, o quitarla.
@@ -31,6 +34,11 @@ Estado a 2026-11-04. La ruta de producción es `GET /x402mint/...`, con verify-o
 
 ## Funcionalidad
 
+- **Colecciones RANDOM y SPECIFY.** Hace falta un forwarder nuevo: el actual tiene fijo el selector `mintTo(address,uint256)`.
+  - RANDOM (`mintRandomTo(address,uint256)`) tiene los mismos argumentos y el mismo precio: en el gateway solo cambia la función. Cada NFT cuesta gas completo (no hay mint por lotes como en 721A), así que habría que limitar `amount`.
+  - SPECIFY (`mintSpecifyTo(address,uint256[])`) necesita los IDs en la URL, comprobar que están libres y cambiar el esquema de Bazaar.
+  - CUSTOM_URI necesita el CID del metadata: fuera de alcance.
+  - Conviene que el forwarder nuevo compruebe el mint (`balanceOf(to)` antes y después).
 - **Arc:** colecciones en ERC-20 USDC con protocol fee nativo (hoy devuelven 400; casi todas las de Arc son nativas).
 - **Permit2** para tokens sin EIP-3009. Es lo que bloquea Robinhood (`4663`, USDG), que además necesita forwarder y facilitador.
 

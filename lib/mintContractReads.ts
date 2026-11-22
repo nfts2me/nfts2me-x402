@@ -15,7 +15,31 @@ export const ABI_CHECKS = [
     // v1 contracts expose mintPrice() (per unit) instead of mintFee(amount)
     { inputs: [], name: "mintPrice", outputs: [{ type: "uint256" }], type: "function", stateMutability: "view" },
     { inputs: [], name: "name", outputs: [{ type: "string" }], type: "function", stateMutability: "view" },
+    // enum MintingType de las colecciones: 0 SEQUENTIAL, 1 RANDOM, 2 SPECIFY, 3 CUSTOM_URI.
+    { inputs: [], name: "mintingType", outputs: [{ type: "uint8" }], type: "function", stateMutability: "view" },
 ] as const;
+
+/**
+ * Único tipo de mint que soporta x402. El forwarder llama siempre a `mintTo(address,uint256)`, que solo
+ * existe en las colecciones secuenciales. En las demás (RANDOM, SPECIFY, CUSTOM_URI) esa llamada cae en
+ * el `fallback` de la colección, que devuelve éxito sin mintear: se cobraría sin entregar el NFT.
+ */
+export const SEQUENTIAL_MINTING_TYPE = 0;
+
+const MINTING_TYPE_NAMES: Record<number, string> = {
+    0: "sequential",
+    1: "random",
+    2: "specify",
+    3: "custom URI",
+};
+
+export function describeMintingType(mintingType: number): string {
+    return MINTING_TYPE_NAMES[mintingType] ?? `type ${mintingType}`;
+}
+
+export function unsupportedMintingTypeMessage(mintingType: number): string {
+    return `This collection uses ${describeMintingType(mintingType)} minting, which x402 does not support yet. Only collections with sequential minting can be minted through x402.`;
+}
 
 type MulticallResult<T> =
     | { status: "success"; result: T }
@@ -142,6 +166,11 @@ export async function readMintContractDataWithMulticall(
                 abi: ABI_CHECKS,
                 functionName: "mintPrice",
             },
+            {
+                address: contractAddress,
+                abi: ABI_CHECKS,
+                functionName: "mintingType",
+            },
         ],
     });
 
@@ -150,6 +179,7 @@ export async function readMintContractDataWithMulticall(
         erc20PaymentAddressResult,
         mintFeeResult,
         mintPriceResult,
+        mintingTypeResult,
     ] = collectionResults;
 
     // v1 contracts may not have protocolFee; treat a revert as 0
@@ -174,11 +204,15 @@ export async function readMintContractDataWithMulticall(
         throw new Error("Failed to read quoteUSDCForNative via multicall");
     }
 
+    // undefined si la colección no expone mintingType() (contratos v1 o ajenos): no se puede saber.
+    const mintingType = mintingTypeResult.status === "success" ? Number(mintingTypeResult.result) : undefined;
+
     return {
         protocolFee,
         erc20PaymentAddress: erc20PaymentAddressResult.result,
         mintFee,
         quoteForOneEth,
+        mintingType,
     };
 }
 

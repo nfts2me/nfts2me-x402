@@ -97,6 +97,10 @@ export type MintFailureAlert = {
     erc20PaymentAddress?: string;
     args?: unknown;
     paymentAuth?: unknown;
+    /** Título propio en lugar de «Mint failed…» (p. ej. cobro sin mint). */
+    title?: string;
+    /** Si es true, la alerta se envía siempre: no se agrupa con otras iguales. */
+    skipDedupe?: boolean;
 };
 
 /**
@@ -118,6 +122,8 @@ export async function alertMintFailure(alert: MintFailureAlert) {
         erc20PaymentAddress,
         args,
         paymentAuth,
+        title: customTitle,
+        skipDedupe,
     } = alert;
 
     const lowFunds = isInsufficientFundsErrorMessage(errorMessage);
@@ -128,7 +134,7 @@ export async function alertMintFailure(alert: MintFailureAlert) {
         functionName ?? "",
         contractAddress ?? "",
     ]);
-    if (isAlertSuppressed(key)) return;
+    if (!skipDedupe && isAlertSuppressed(key)) return;
 
     const chain = SUPPORTED_CHAINS[String(chainId)];
     const chainLabel = chain ? `${chain.name} (${chainId})` : `chain ${chainId}`;
@@ -145,7 +151,9 @@ export async function alertMintFailure(alert: MintFailureAlert) {
         : undefined;
     const usdcAddress = USDC_ADDRESSES[chainId];
 
-    const title = lowFunds
+    const title = customTitle
+      ? `${customTitle} (${chainLabel})`
+      : lowFunds
         ? `⚠️ Mint failed: low native gas on ${chainLabel}`
         : isUnauthorizedRelayerErrorMessage(errorMessage)
           ? `🚨 Mint failed: gateway wallet is not a relayer on the forwarder (${chainLabel}). Call setRelayer from the owner.`
